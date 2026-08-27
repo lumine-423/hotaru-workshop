@@ -1,4 +1,4 @@
-/*! hotaru-workshop v2.4.0 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.4.2 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
  *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
  *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
@@ -6,7 +6,7 @@
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOK = '群星的资料库 v4.0';
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.4.0';
+const EXT_VERSION = '2.4.2';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
@@ -251,21 +251,9 @@ function closedOff() {
   return { disable: true, constant: false, selective: false, key: [], keysecondary: [], position: 1, depth: 4, order: 100, probability: 100 };
 }
 
-/* 原版 11 个 DLC：控制器与速览必须固定保留，工坊角色只追加、不得覆盖 */
-const FIXED_DLC_CHARS = [
-  { name: '沃露普塔', locations: ['月影村'] },
-  { name: '莉比蒂妮', locations: ['月影村'] },
-  { name: '库比蒂妮', locations: ['月影村'] },
-  { name: '冬野秋夜殇', locations: ['永夜宫赌场'] },
-  { name: '冬野梦梦', locations: ['永夜宫赌场'] },
-  { name: '望月霞', locations: ['望月流忍宗领地'] },
-  { name: '御影紫月', locations: ['永夜宫赌场'] },
-  { name: '无常', locations: null },
-  { name: '夏雯', locations: null },
-  { name: '夜海星', locations: null },
-  { name: '夜星海', locations: ['新东京都海滨'] },
-];
-const FIXED_DLC_NAMES = new Set(FIXED_DLC_CHARS.map((c) => c.name));
+/* 原版 11 个 DLC：控制器数组与速览必须固定保留，工坊角色只追加、不得覆盖 */
+const FIXED_DLC_CHARS = ['沃露普塔', '莉比蒂妮', '库比蒂妮', '冬野秋夜殇', '冬野梦梦', '望月霞', '御影紫月', '无常', '夏雯', '夜海星', '夜星海'];
+const FIXED_DLC_NAMES = new Set(FIXED_DLC_CHARS);
 const FIXED_DLC_OVERVIEW = `DLC角色速览:
   简介：在这个世界的管理边缘地带，有一些不属于MF体系的少女们，她们独立于现有的体系，等待着{{user}}去发现，去邂逅。
   角色初始变量设置: 当角色初次登场后，按照以下格式写入stat_data/DLC/{角色名}/
@@ -364,12 +352,6 @@ const FIXED_DLC_OVERVIEW = `DLC角色速览:
 function jsQuote(s) {
   return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 }
-function extraLocationsOf(extra) {
-  if (!extra || typeof extra !== 'object') return null;
-  if (Array.isArray(extra.locations) && extra.locations.length) return extra.locations.map((x) => String(x));
-  if (extra.location) return [String(extra.location)];
-  return null;
-}
 function upsertShared(data, names, patch) {
   const nameList = Array.isArray(names) ? names : [names];
   for (const entry of Object.values(data.entries || {})) {
@@ -381,11 +363,8 @@ function upsertShared(data, names, patch) {
   }
   return upsertEntry(data, nameList[0], patch);
 }
-function charControllerCode(chars) {
-  const list = (chars || []).map((c) => {
-    const loc = c.locations == null ? 'null' : '[' + (Array.isArray(c.locations) ? c.locations : [c.locations]).map(jsQuote).join(', ') + ']';
-    return '    { name: ' + jsQuote(c.name) + ', locations: ' + loc + ' }';
-  }).join(',\n');
+function charControllerCode(names) {
+  const list = (names || []).map(jsQuote).join(', ');
   return `@@preprocessing
 <%
 function getVal(path) {
@@ -407,37 +386,17 @@ function isPresent(charName) {
     return 在场角色.indexOf(charName) !== -1;
 }
 
-var 当前地点 = getVal('stat_data.主角组.当前地点') || '';
-function locationMatch(keyword) {
-    return typeof 当前地点 === 'string' && 当前地点.includes(keyword);
-}
-
 function isDLCUnlocked(charName) {
     return exists('stat_data.DLC.' + charName);
 }
 
-var dlcCharacters = [
-${list}
-];
+var dlcCharacters = [${list}];
 
 var activated = [];
 
-dlcCharacters.forEach(function(char) {
-    var count = 0;
-    if (isPresent(char.name)) count++;
-    if (char.locations === null) {
-        count++;
-    } else {
-        for (var i = 0; i < char.locations.length; i++) {
-            if (locationMatch(char.locations[i])) {
-                count++;
-                break;
-            }
-        }
-    }
-    if (isDLCUnlocked(char.name)) count++;
-    if (count >= 2) {
-        activated.push('DLC/' + char.name);
+dlcCharacters.forEach(function(name) {
+    if (isPresent(name) && isDLCUnlocked(name)) {
+        activated.push('DLC/' + name);
     }
 });
 
@@ -453,8 +412,23 @@ if (activated.length > 0) {
 %>`;
 }
 function formatExtraOverview(c) {
-  const intro = String(c.overview || '').trim().split(/\r?\n/)[0] || '工坊导入角色';
-  return '  ' + c.name + ':\n    阵营: ' + (c.faction || '工坊') + '\n    简介: ' + intro + '\n    邂逅解锁条件: ' + (c.unlock || '工坊导入') + '\n    形态:\n      - 日常\n      - 变身';
+  const raw = String(c.overview || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/^\n+/, '').replace(/\n+$/, '');
+  if (!raw) return '';
+  const lines = raw.split('\n');
+  let min = Infinity;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const lead = line.match(/^[ \t]*/);
+    const n = lead ? lead[0].replace(/\t/g, '  ').length : 0;
+    if (n < min) min = n;
+  }
+  if (!Number.isFinite(min)) min = 0;
+  return lines.map((line) => {
+    if (!line.trim()) return '';
+    const expanded = line.replace(/\t/g, '  ');
+    const stripped = expanded.slice(0, min) === ' '.repeat(min) ? expanded.slice(min) : expanded.replace(/^[ \t]+/, '');
+    return '  ' + stripped;
+  }).join('\n');
 }
 function eventControllerCode(configs) {
   const lines = configs.map((c) => "    { id: '" + c.id.replace(/'/g, "\\'") + "', dlcChar: '" + String(c.dlcChar || '').replace(/'/g, "\\'") + "' }");
@@ -468,7 +442,7 @@ function applyPackageToWorldbook(data, pkg) {
   const base = metaOf(pkg, { name: '' });
   if (cat === 'character') {
     const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [pkg.title];
-    const overview = String(extra.overview || extra.intro || '').trim();
+    const overview = String(extra.overview || extra.intro || '');
     const archive = String(extra.archive || extra.daily || extra.content || extra.summary || '').trim();
     let wrote = 0;
     for (const rn of roleNames) {
@@ -478,10 +452,7 @@ function applyPackageToWorldbook(data, pkg) {
       const entry = upsertEntry(data, name, {});
       stampEntry(entry, name, Object.assign({}, base, {
         name, roleNames: [rn], category: 'character',
-        overview: overview || archive,
-        locations: extraLocationsOf(extra),
-        faction: extra.faction || '',
-        unlock: extra.unlock || extra.unlockCondition || '',
+        overview,
       }), Object.assign(closedOff(), {
         content: wrapNamed('DLC_' + rn, archive || overview),
       }));
@@ -527,14 +498,12 @@ function rebuildSharedEntries(data, pkg) {
     seen.add(rn);
     extras.push({
       name: rn,
-      locations: x.meta.locations == null ? null : x.meta.locations,
       overview: x.meta.overview || '',
-      faction: x.meta.faction || '工坊',
-      unlock: x.meta.unlock || '工坊导入',
     });
   }
-  const overviewBody = extras.length
-    ? FIXED_DLC_OVERVIEW + '\n\n' + extras.map(formatExtraOverview).join('\n\n')
+  const extraBlocks = extras.map(formatExtraOverview).filter(Boolean);
+  const overviewBody = extraBlocks.length
+    ? FIXED_DLC_OVERVIEW + '\n\n' + extraBlocks.join('\n\n')
     : FIXED_DLC_OVERVIEW;
   const ov = upsertShared(data, ['DLC/角色速览', 'DLC角色速览'], {});
   stampEntry(ov, 'DLC/角色速览', Object.assign({}, base, { name: 'DLC/角色速览', category: 'character' }), Object.assign(blueOn(1001), {
@@ -542,7 +511,7 @@ function rebuildSharedEntries(data, pkg) {
   }));
   const ctrl = upsertShared(data, ['DLC角色控制器'], {});
   stampEntry(ctrl, 'DLC角色控制器', Object.assign({}, base, { name: 'DLC角色控制器', category: 'character' }), Object.assign(blueOn(6), {
-    content: charControllerCode(FIXED_DLC_CHARS.concat(extras)),
+    content: charControllerCode(FIXED_DLC_CHARS.concat(extras.map((e) => e.name))),
   }));
   const configs = [];
   for (const x of findManaged(data).filter((it) => it.meta.category === 'event')) {
