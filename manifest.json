@@ -1,0 +1,13 @@
+{
+    "display_name": "hotaru-workshop · 荧荧工坊",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "lumine-423",
+    "version": "2.3.5",
+    "homePage": "https://github.com/lumine-423/hotaru-workshop",
+    "auto_update": true
+}
