@@ -1,12 +1,12 @@
-/*! hotaru-workshop v2.3.5 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.3.7 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
- *       扩展条目 = 星海式设置卡片（打开工坊 / 检查更新 / 更新）
+ *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
  *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
  */
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOK = '群星的资料库 v4.0';
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.3.5';
+const EXT_VERSION = '2.3.7';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
@@ -546,7 +546,7 @@ function buildRepo() {
   ball.title = 'hotaru-workshop · 我的仓库';
   ball.setAttribute('aria-label', '打开荧荧工坊本地仓库');
   ball.setAttribute('data-hidden', '1');
-  ball.innerHTML = '<span class="hwf-atom" aria-hidden="true"><span class="hwf-orbit o1"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-orbit o2"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-orbit o3"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-nucleus"><span class="hwf-nucleus-core"></span><span class="hwf-nucleus-shine"></span></span></span><span class="hwf-fab-badge" data-badge hidden>!</span>';
+  ball.innerHTML = '<span class="hwf-atom" aria-hidden="true"><span class="hwf-orbit o1"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-orbit o2"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-orbit o3"><span class="hwf-spin"><span class="hwf-electron"></span></span></span><span class="hwf-nucleus"><span class="hwf-nucleus-core"></span><span class="hwf-nucleus-shine"></span></span></span>';
   const veil = document.createElement('div');
   veil.className = 'hwf-veil';
   veil.setAttribute('aria-hidden', 'true');
@@ -557,7 +557,7 @@ function buildRepo() {
   panel.setAttribute('aria-label', '荧荧工坊本地仓库');
   panel.innerHTML = `
     <button type="button" class="hwf-close" id="hwf-close" aria-label="关闭">×</button>
-    <div class="hwf-repo-head">我的仓库 <span class="hwf-repo-sub">hotaru-workshop v${EXT_VERSION} · 荧荧工坊 <span class="hwf-update-badge" data-badge hidden>有更新</span></span></div>
+    <div class="hwf-repo-head">我的仓库 <span class="hwf-repo-sub">hotaru-workshop v${EXT_VERSION} · 荧荧工坊</span></div>
     <div class="hwf-repo-body">
       <div class="hwf-repo-login" id="hwf-login"></div>
       <div class="hwf-repo-actions">
@@ -643,7 +643,7 @@ function renderRepo() {
   });
 }
 
-/* ---------- 扩展条目设置卡片（星海式） ---------- */
+/* ---------- 扩展条目设置卡片 ---------- */
 let settingsMounted = false;
 async function reqHeaders() {
   try { const mod = await import('/script.js'); if (mod && typeof mod.getRequestHeaders === 'function') return mod.getRequestHeaders(); } catch { }
@@ -669,16 +669,10 @@ function applyUpdateChrome(has, message, canGitUpdate) {
   if (settingsPanel) roots.push(settingsPanel);
   if (ui && ui.panel) roots.push(ui.panel);
   for (const root of roots) {
-    const badge = root.querySelector('[data-badge]');
     const btn = root.querySelector('[data-update]');
     const status = root.querySelector('[data-status]');
-    if (badge) badge.hidden = !has;
     if (btn) btn.hidden = !(has && canGitUpdate);
     if (status && message != null) status.textContent = message;
-  }
-  if (ui && ui.ball) {
-    const fabBadge = ui.ball.querySelector('[data-badge]');
-    if (fabBadge) fabBadge.hidden = !has;
   }
 }
 function cmpVer(a, b) {
@@ -722,14 +716,14 @@ async function checkUpdate(panel, quiet) {
     }
     const gh = await checkGithubManifest();
     if (gh === true) {
-      applyUpdateChrome(true, '发现新版本。请用酒馆「从 URL 安装」更新，或点「更新荧荧工坊」（需 Git 安装）。', false);
+      applyUpdateChrome(true, '发现新版本。请用酒馆扩展列表更新，或点「更新荧荧工坊」（需 Git 安装）。', false);
       return true;
     }
     if (gh === false) {
       applyUpdateChrome(false, '已是最新 · v' + EXT_VERSION, false);
       return false;
     }
-    applyUpdateChrome(false, '当前不是 Git 安装；从 GitHub 安装一次后即可自动提示更新。', false);
+    applyUpdateChrome(false, '当前不是 Git 安装；从 GitHub 安装一次后即可在本页更新。', false);
     return false;
   } catch (e) {
     if (!quiet && status) status.textContent = '检查更新失败：' + (e && e.message ? e.message : String(e));
@@ -761,7 +755,7 @@ function mountSettingsPanel() {
   if (document.getElementById('hwf-ext-settings')) { settingsMounted = true; return true; }
   const panel = document.createElement('div');
   panel.id = 'hwf-ext-settings';
-  panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>hotaru-workshop · 荧荧工坊 <span class="hwf-ext-version">v${EXT_VERSION}</span> <span class="hwf-update-badge" data-badge hidden>有更新</span></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><div class="hwf-ext-actions"><button type="button" class="menu_button" data-repo>打开本地仓库</button><button type="button" class="menu_button" data-open>进入荧荧工坊</button><button type="button" class="menu_button" data-check>检查更新</button><button type="button" class="menu_button" data-update hidden>更新荧荧工坊</button></div><small data-status>正在读取版本状态…</small></div></div>`;
+  panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>hotaru-workshop · 荧荧工坊 <span class="hwf-ext-version">v${EXT_VERSION}</span></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><div class="hwf-ext-actions"><button type="button" class="menu_button" data-repo>打开本地仓库</button><button type="button" class="menu_button" data-open>进入荧荧工坊</button><button type="button" class="menu_button" data-check>检查更新</button><button type="button" class="menu_button" data-update hidden>更新荧荧工坊</button></div><small data-status></small></div></div>`;
   host.appendChild(panel);
   panel.querySelector('[data-repo]').addEventListener('click', () => openRepoPanel());
   panel.querySelector('[data-open]').addEventListener('click', () => { window.open(settings.gateway + '?from=' + encodeURIComponent(location.origin), '_blank'); });

@@ -1,4 +1,4 @@
-/* hotaru-workshop v2.3.5 —— 夜环工坊壳：正视同心轨道悬浮球 / 悬浮窗 / 扩展条目 */
+/* hotaru-workshop v2.3.7 —— 夜环工坊壳：正视同心轨道悬浮球 / 悬浮窗 / 扩展条目 */
 :root {
     --hwf-bg-0: #0d1322;
     --hwf-bg-1: #182238;
@@ -119,24 +119,10 @@
     box-shadow: 0 0 8px rgba(143, 181, 232, 1), 0 0 14px rgba(90, 140, 210, .5);
 }
 
-.hwf-fab-badge {
-    position: absolute; right: 8px; top: 8px;
-    min-width: 16px; height: 16px; padding: 0 4px;
-    border-radius: 999px;
-    background: linear-gradient(150deg, #7aa3dc, #35547f);
-    color: #f4f8ff; font-size: 10px; font-weight: 800; line-height: 16px;
-    box-shadow: 0 4px 12px rgba(53, 84, 127, .45);
-    animation: hwf-badge-pop .5s var(--hwf-pop);
-}
-
 @keyframes hwf-orbit-spin { to { transform: rotate(360deg); } }
 @keyframes hwf-breathe {
     0%, 100% { transform: scale(.96); }
     50% { transform: scale(1.08); }
-}
-@keyframes hwf-badge-pop {
-    from { transform: scale(.4); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
 }
 
 .hwf-veil {
@@ -296,12 +282,6 @@
 }
 
 .hwf-ext-version { font-size: 12px; color: var(--hwf-ink-dim); font-weight: 400; margin-left: 4px; }
-.hwf-update-badge {
-    display: inline-block; margin-left: 6px; padding: 1px 8px;
-    border-radius: 999px; font-size: 11px; font-weight: 800;
-    color: #fffaf0; background: linear-gradient(150deg, #f0a090, var(--hwf-blush));
-    animation: hwf-badge-pop .45s var(--hwf-pop);
-}
 .hwf-ext-actions {
     display: flex !important; flex-direction: row !important; align-items: center;
     gap: 8px; flex-wrap: wrap; margin: 8px 0;
