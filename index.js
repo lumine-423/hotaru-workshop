@@ -1,4 +1,4 @@
-/*! hotaru-workshop v2.3.7 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.3.9 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
  *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
  *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
@@ -6,7 +6,7 @@
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOK = '群星的资料库 v4.0';
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.3.7';
+const EXT_VERSION = '2.3.9';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
@@ -40,6 +40,7 @@ function loadSettings() {
   const c = getCtx();
   settings = (c && c.extensionSettings && c.extensionSettings[NS]) || {};
   settings = { gateway: GATEWAY, worldbook: WORLDBOOK, token: '', user: null, admin: false, pendingKey: '', ...settings };
+  settings.worldbook = WORLDBOOK;
 }
 function saveSettings() {
   const c = getCtx();
@@ -189,7 +190,16 @@ function logout() {
 }
 
 /* ---------- 世界书导入（沿用 v1 引擎） ---------- */
-function entryMetaOf(entry) { if (!entry || !entry.comment) return null; try { const p = JSON.parse(entry.comment); if (p && p.source === SOURCE_KIND) return p; } catch { } return null; }
+function entryMetaOf(entry) {
+  if (!entry) return null;
+  for (const raw of [entry.automationId, entry.comment]) {
+    if (!raw || typeof raw !== 'string') continue;
+    const s = raw.trim();
+    if (s.charAt(0) !== '{') continue;
+    try { const p = JSON.parse(s); if (p && p.source === SOURCE_KIND) return p; } catch { /* ignore */ }
+  }
+  return null;
+}
 async function loadWorldbook() {
   const c = getCtx();
   if (c && typeof c.getWorldInfoNames === 'function') {
@@ -208,14 +218,37 @@ async function saveWorldbook(data) {
   if (!res.ok) throw new Error('世界书保存失败 HTTP ' + res.status);
 }
 function entryTemplate() {
-  return { uid: 0, displayIndex: 0, comment: '', disable: false, constant: true, selective: false, key: [], selectiveLogic: 0, keysecondary: [], scanDepth: null, vectorized: false, position: 1, role: null, depth: 4, order: 100, content: '', useProbability: true, probability: 100, excludeRecursion: true, preventRecursion: true, delayUntilRecursion: false, sticky: null, cooldown: null, delay: null, addMemo: false, matchPersonaDescription: false, matchCharacterDescription: false, matchCharacterPersonality: false, matchCharacterDepthPrompt: false, matchScenario: false, matchCreatorNotes: false, group: '', groupOverride: false, groupWeight: 100, caseSensitive: null, matchWholeWords: null, useGroupScoring: false, outletName: '', triggers: [], ignoreBudget: false, automationId: '' };
+  return { uid: 0, displayIndex: 0, comment: '', disable: false, constant: false, selective: false, key: [], selectiveLogic: 0, keysecondary: [], scanDepth: null, vectorized: false, position: 1, role: null, depth: 4, order: 100, content: '', useProbability: true, probability: 100, excludeRecursion: true, preventRecursion: true, delayUntilRecursion: false, sticky: null, cooldown: null, delay: null, addMemo: true, matchPersonaDescription: false, matchCharacterDescription: false, matchCharacterPersonality: false, matchCharacterDepthPrompt: false, matchScenario: false, matchCreatorNotes: false, group: '', groupOverride: false, groupWeight: 100, caseSensitive: null, matchWholeWords: null, useGroupScoring: false, outletName: '', triggers: [], ignoreBudget: false, automationId: '' };
+}
+function wrapNamed(tag, body) {
+  const inner = String(body || '').trim();
+  if (!inner) return '';
+  const open = '<' + tag + '>';
+  if (inner.indexOf(open) !== -1) return inner;
+  return open + '\n' + inner + '\n</' + tag + '>';
 }
 function findManaged(data) { const out = []; for (const [uidStr, entry] of Object.entries(data.entries || {})) { const m = entryMetaOf(entry); if (m) out.push({ uidStr, entry, meta: m }); } return out; }
 function upsertEntry(data, name, patch) {
   for (const [uidStr, entry] of Object.entries(data.entries || {})) { const m = entryMetaOf(entry); if (m && m.name === name) { Object.assign(entry, patch); return entry; } }
+  for (const entry of Object.values(data.entries || {})) {
+    if (entry && String(entry.comment || '') === name) { Object.assign(entry, patch); return entry; }
+  }
   const entry = entryTemplate(); let maxUid = -1, maxDisp = -1;
   for (const [uidStr, e] of Object.entries(data.entries || {})) { const n = parseInt(uidStr, 10); if (Number.isInteger(n) && n > maxUid) maxUid = n; if (Number.isInteger(e.displayIndex) && e.displayIndex > maxDisp) maxDisp = e.displayIndex; }
   entry.uid = maxUid + 1; entry.displayIndex = maxDisp + 1; data.entries[String(entry.uid)] = entry; Object.assign(entry, patch); return entry;
+}
+function stampEntry(entry, name, meta, fields) {
+  entry.comment = name;
+  entry.addMemo = true;
+  entry.automationId = JSON.stringify(meta);
+  Object.assign(entry, fields);
+  return entry;
+}
+function blueOn(order) {
+  return { disable: false, constant: true, selective: false, key: [], keysecondary: [], position: 1, depth: 4, order: order, probability: 100 };
+}
+function closedOff() {
+  return { disable: true, constant: false, selective: false, key: [], keysecondary: [], position: 1, depth: 4, order: 100, probability: 100 };
 }
 function charControllerCode(names) {
   const list = names.map((n) => "'" + n.replace(/'/g, "\\'") + "'").join(', ');
@@ -226,91 +259,105 @@ function eventControllerCode(configs) {
   return '@@preprocessing\n<%\nfunction getVal(path) {\n    try {\n        return getvar(path, { defaults: undefined });\n    } catch(e) {\n        return undefined;\n    }\n}\nfunction exists(path) {\n    return getVal(path) !== undefined;\n}\nfunction isCompleted(eventId) {\n    return getVal(\'stat_data.剧情事件.已完成事件.\' + eventId) === true;\n}\n\nvar activated = [];\n\n// ===== 在此填入你的DLC事件配置 =====\n// 每一项：{ id: \'剧情事件/xxx\', dlcChar: \'角色名\' }\nvar eventConfigs = [\n' + lines.join(',\n') + '\n];\neventConfigs.forEach(function(config) {\n    var eventId = config.id;\n    var dlcChar = config.dlcChar;\n    if (!isCompleted(eventId) && exists(\'stat_data.DLC角色.\' + dlcChar)) {\n        activated.push(eventId);\n    }\n});\n\nif (activated.length > 0) {\n    for (var i = 0; i < activated.length; i++) {\n%>\n<rule_动态内容_<%= activated[i] %>>\n<%- await getwi(activated[i]) %>\n</rule_动态内容_<%= activated[i] %>>\n<%\n    }\n}\n%>';
 }
 function metaOf(pkg, extra) { return { source: SOURCE_KIND, kind: 'workshop_package', series: pkg.series || 'mf', category: pkg.category || pkg.type, packageId: pkg.id, revision: pkg.revision, packageContentHash: pkg.contentHash, ...extra }; }
-async function importPackage(pkg) {
+function applyPackageToWorldbook(data, pkg) {
   const cat = pkg.category || pkg.type;
   const extra = pkg.payload && pkg.payload.extra ? pkg.payload.extra : {};
-  if (!['character', 'faction', 'event', 'gameplay', 'rule', 'other'].includes(cat)) { toast('该类型暂不支持导入（' + cat + '）', true); return; }
-  if (!window.confirm('导入「' + pkg.title + '」到世界书「' + settings.worldbook + '」？')) return;
+  if (!['character', 'faction', 'event', 'gameplay', 'rule', 'other'].includes(cat)) throw new Error('该类型暂不支持导入（' + cat + '）');
+  const base = metaOf(pkg, { name: '' });
+  if (cat === 'character') {
+    const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [pkg.title];
+    const overview = String(extra.overview || extra.intro || '').trim();
+    const archive = String(extra.archive || extra.daily || extra.content || extra.summary || '').trim();
+    for (const rn of roleNames) {
+      const name = 'DLC/' + rn;
+      const entry = upsertEntry(data, name, {});
+      stampEntry(entry, name, Object.assign({}, base, { name, roleNames: [rn], category: 'character', overview: overview || archive }), Object.assign(closedOff(), {
+        content: wrapNamed('DLC_' + rn, archive || overview),
+      }));
+    }
+  } else if (cat === 'faction') {
+    const name = 'DLC/' + pkg.title;
+    const entry = upsertEntry(data, name, {});
+    const keys = (Array.isArray(extra.keywords) && extra.keywords.length ? extra.keywords : [pkg.title]).slice(0, 20);
+    const factionCount = findManaged(data).filter((x) => x.meta.category === 'faction').length;
+    stampEntry(entry, name, Object.assign({}, base, { name, category: 'faction', keywords: extra.keywords || [] }), {
+      content: String(extra.content || '').trim(),
+      disable: false, constant: false, selective: true, key: keys, keysecondary: [],
+      depth: 0, position: 1, order: 121 + factionCount, probability: 100,
+    });
+  } else if (cat === 'gameplay' || cat === 'rule' || cat === 'other') {
+    const name = 'DLC/' + pkg.title;
+    const entry = upsertEntry(data, name, {});
+    stampEntry(entry, name, Object.assign({}, base, { name, category: cat }), Object.assign(blueOn(cat === 'gameplay' ? 131 : cat === 'rule' ? 141 : 151), {
+      content: String(extra.content || '').trim(),
+    }));
+  } else if (cat === 'event') {
+    const eventNames = Array.isArray(extra.eventNames) && extra.eventNames.length ? extra.eventNames : [pkg.title];
+    const roleNames = Array.isArray(extra.roleNames) ? extra.roleNames : [];
+    const contentText = String(extra.content || '').trim();
+    for (const en of eventNames) {
+      const name = '剧情事件/' + en;
+      const entry = upsertEntry(data, name, {});
+      stampEntry(entry, name, Object.assign({}, base, { name, category: 'event', eventName: en, roleNames }), Object.assign(closedOff(), {
+        content: contentText,
+      }));
+    }
+  }
+}
+function rebuildSharedEntries(data, pkg) {
+  const base = metaOf(pkg || { series: 'mf', id: '', revision: 0, contentHash: '' }, {});
+  const chars = findManaged(data).filter((it) => it.meta.category === 'character' && it.meta.name && it.meta.name.indexOf('DLC/') === 0 && it.meta.name !== 'DLC/角色速览');
+  const parts = [];
+  const allRoles = [];
+  for (const x of chars) {
+    const text = String(x.meta.overview || '').trim();
+    const rn = (x.meta.roleNames && x.meta.roleNames[0]) || String(x.meta.name || '').slice(4);
+    if (text && rn) parts.push(rn + ':\n' + text);
+    if (x.meta.roleNames) allRoles.push(...x.meta.roleNames);
+  }
+  if (parts.length) {
+    const ov = upsertEntry(data, 'DLC/角色速览', {});
+    stampEntry(ov, 'DLC/角色速览', Object.assign({}, base, { name: 'DLC/角色速览', category: 'character' }), Object.assign(blueOn(1001), {
+      content: wrapNamed('角色速览_id0', parts.join('\n\n')),
+    }));
+  }
+  const uniq = [...new Set(allRoles.filter(Boolean))];
+  if (uniq.length) {
+    const ctrl = upsertEntry(data, 'DLC角色控制器', {});
+    stampEntry(ctrl, 'DLC角色控制器', Object.assign({}, base, { name: 'DLC角色控制器', category: 'character' }), Object.assign(blueOn(6), {
+      content: charControllerCode(uniq),
+    }));
+  }
+  const configs = [];
+  for (const x of findManaged(data).filter((it) => it.meta.category === 'event')) {
+    if (x.meta.name && x.meta.name.indexOf('剧情事件/') === 0) {
+      const charsBound = Array.isArray(x.meta.roleNames) ? x.meta.roleNames : [];
+      if (charsBound.length) configs.push({ id: x.meta.name, dlcChar: charsBound[0] });
+    }
+  }
+  if (configs.length) {
+    const ctrl = upsertEntry(data, 'DLC剧情事件控制器', {});
+    stampEntry(ctrl, 'DLC剧情事件控制器', Object.assign({}, base, { name: 'DLC剧情事件控制器', category: 'event' }), Object.assign(blueOn(7), {
+      content: eventControllerCode(configs),
+    }));
+  }
+}
+async function importMany(pkgs) {
+  const list = (pkgs || []).filter(Boolean);
+  if (!list.length) { toast('没有可导入的作品', true); return; }
+  if (!window.confirm('导入 ' + list.length + ' 件作品到世界书「' + settings.worldbook + '」？')) return;
   load(true);
   try {
     const data = await loadWorldbook();
-    const base = metaOf(pkg, { name: '' });
-    if (cat === 'character') {
-      const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [pkg.title];
-      const overviewText = String(extra.summary || '').trim();
-      for (const rn of roleNames) {
-        const name = 'DLC/' + rn;
-        const entry = upsertEntry(data, name, {});
-        const m = JSON.parse(entry.comment || '{}'); Object.assign(m, base, { name, roleNames: [rn], category: 'character' }); entry.comment = JSON.stringify(m);
-        entry.disable = true; entry.constant = false; entry.selective = false; entry.key = [ENTRY_MARK + rn];
-        if (overviewText) entry.content = overviewText;
-      }
-      const parts = [];
-      for (const x of findManaged(data).filter((it) => it.meta.category === 'character')) {
-        const text = String(x.meta.summary || '').trim();
-        if (x.meta.name && x.meta.name.startsWith('DLC/') && text) parts.push(x.meta.name.slice(4) + ':\n' + text);
-      }
-      if (parts.length) {
-        const ov = upsertEntry(data, 'DLC/角色速览', {});
-        const m = JSON.parse(ov.comment || '{}'); Object.assign(m, base, { name: 'DLC/角色速览', category: 'character' }); ov.comment = JSON.stringify(m);
-        ov.content = parts.join('\n\n'); ov.constant = true; ov.selective = false; ov.disable = false; ov.order = 1001; ov.probability = 100; ov.depth = 4; ov.key = [ENTRY_MARK + 'overview'];
-      }
-      const allRoles = [];
-      for (const x of findManaged(data).filter((it) => it.meta.category === 'character')) { if (x.meta.name && x.meta.name.startsWith('DLC/') && x.meta.roleNames) allRoles.push(...x.meta.roleNames); }
-      const uniq = [...new Set(allRoles)];
-      if (uniq.length) {
-        const ctrl = upsertEntry(data, 'DLC角色控制器', {});
-        const m = JSON.parse(ctrl.comment || '{}'); Object.assign(m, base, { name: 'DLC角色控制器', category: 'character' }); ctrl.comment = JSON.stringify(m);
-        ctrl.content = charControllerCode(uniq); ctrl.constant = true; ctrl.selective = false; ctrl.disable = false; ctrl.order = 6; ctrl.probability = 100; ctrl.depth = 4; ctrl.key = [ENTRY_MARK + 'controller'];
-      }
+    const skipped = [];
+    for (const pkg of list) {
+      try { applyPackageToWorldbook(data, pkg); }
+      catch (e) { skipped.push((pkg.title || pkg.id || '') + '：' + (e && e.message ? e.message : String(e))); }
     }
-    if (cat === 'faction') {
-      const name = 'DLC/' + pkg.title;
-      const entry = upsertEntry(data, name, {});
-      const m = JSON.parse(entry.comment || '{}'); Object.assign(m, base, { name, category: 'faction', keywords: extra.keywords || [] }); entry.comment = JSON.stringify(m);
-      entry.content = String(extra.content || '').trim(); entry.constant = false; entry.selective = true; entry.disable = false;
-      entry.key = (Array.isArray(extra.keywords) && extra.keywords.length ? extra.keywords : [pkg.title]).slice(0, 20);
-      entry.depth = 0; entry.position = 1;
-      entry.order = 121 + findManaged(data).filter((x) => x.meta.category === 'faction').length;
-      entry.probability = 100;
-    }
-    if (cat === 'gameplay' || cat === 'rule' || cat === 'other') {
-      /* 玩法/规则/其他：无关键词板块，导入为蓝灯常驻条目（constant=true，忽略关键词触发） */
-      const name = 'DLC/' + pkg.title;
-      const entry = upsertEntry(data, name, {});
-      const m = JSON.parse(entry.comment || '{}'); Object.assign(m, base, { name, category: cat }); entry.comment = JSON.stringify(m);
-      entry.content = String(extra.content || '').trim();
-      entry.constant = true; entry.selective = false; entry.disable = false;
-      entry.key = [ENTRY_MARK + String(pkg.title || '')];
-      entry.depth = 4; entry.position = 1;
-      entry.order = cat === 'gameplay' ? 131 : cat === 'rule' ? 141 : 151;
-      entry.probability = 100;
-    }
-    if (cat === 'event') {
-      const eventNames = Array.isArray(extra.eventNames) && extra.eventNames.length ? extra.eventNames : [pkg.title];
-      const roleNames = Array.isArray(extra.roleNames) ? extra.roleNames : [];
-      const contentText = String(extra.content || '').trim();
-      for (const en of eventNames) {
-        const name = '剧情事件/' + en;
-        const entry = upsertEntry(data, name, {});
-        const m = JSON.parse(entry.comment || '{}'); Object.assign(m, base, { name, category: 'event', eventName: en, roleNames }); entry.comment = JSON.stringify(m);
-        entry.content = contentText; entry.disable = true; entry.constant = false; entry.selective = false; entry.key = [ENTRY_MARK + 'event:' + en];
-      }
-      const configs = [];
-      for (const x of findManaged(data).filter((it) => it.meta.category === 'event')) {
-        if (x.meta.name && x.meta.name.startsWith('剧情事件/')) {
-          const chars = Array.isArray(x.meta.roleNames) ? x.meta.roleNames : [];
-          if (chars.length) configs.push({ id: x.meta.name, dlcChar: chars[0] });
-        }
-      }
-      if (configs.length) {
-        const ctrl = upsertEntry(data, 'DLC剧情事件控制器', {});
-        const m = JSON.parse(ctrl.comment || '{}'); Object.assign(m, base, { name: 'DLC剧情事件控制器', category: 'event' }); ctrl.comment = JSON.stringify(m);
-        ctrl.content = eventControllerCode(configs); ctrl.constant = true; ctrl.selective = false; ctrl.disable = false; ctrl.order = 7; ctrl.probability = 100; ctrl.depth = 4; ctrl.key = [ENTRY_MARK + 'eventctl'];
-      }
-    }
+    rebuildSharedEntries(data, list[0]);
     await saveWorldbook(data);
-    toast('已导入「' + pkg.title + '」');
+    toast('已导入 ' + (list.length - skipped.length) + ' 件' + (skipped.length ? '；跳过 ' + skipped.length + ' 件' : ''));
+    if (skipped.length) toast(skipped.join('\n'), true);
     renderRepo();
   } catch (e) {
     toast('导入失败：' + e.message, true);
@@ -562,6 +609,7 @@ function buildRepo() {
       <div class="hwf-repo-login" id="hwf-login"></div>
       <div class="hwf-repo-actions">
         <button class="hwf-btn hwf-btn-main" id="hwf-open">进入荧荧工坊</button>
+        <button class="hwf-btn" id="hwf-import-sel">导入选中</button>
         <button class="hwf-btn" id="hwf-import">导入文件</button>
         <button class="hwf-btn" id="hwf-check">检查更新</button>
         <button class="hwf-btn" id="hwf-update" data-update hidden>更新荧荧工坊</button>
@@ -580,6 +628,7 @@ function buildRepo() {
   veil.addEventListener('click', closeRepoPanel);
   panel.querySelector('#hwf-close').addEventListener('click', closeRepoPanel);
   panel.querySelector('#hwf-open').addEventListener('click', () => { window.open(settings.gateway + '?from=' + encodeURIComponent(location.origin), '_blank'); });
+  panel.querySelector('#hwf-import-sel').addEventListener('click', importSelected);
   panel.querySelector('#hwf-import').addEventListener('click', pickImportFile);
   panel.querySelector('#hwf-check').addEventListener('click', () => checkUpdate(panel, false));
   panel.querySelector('#hwf-update').addEventListener('click', () => doUpdate(panel));
@@ -591,21 +640,34 @@ function rowHtml(p, local) {
   const author = (p.publisher && p.publisher.displayName) ? p.publisher.displayName : '匿名';
   return `
       <div class="hwf-row">
+        <label class="hwf-check"><input type="checkbox" data-sel="${esc(p.id)}" ${local ? 'data-local="1"' : ''}></label>
         <div class="hwf-row-info"><div class="hwf-row-title">${esc(p.title)}${local ? ' <span class="hwf-local">本地文件</span>' : ''}</div><div class="hwf-row-sub">${esc(author)} · ${esc(p.category || p.type || '')}</div></div>
-        <button class="hwf-mini" data-imp="${esc(p.id)}" ${local ? 'data-local="1"' : ''}>导入世界书</button>
         <button class="hwf-mini hwf-mini-ghost" data-del="${esc(p.id)}" ${local ? 'data-local="1"' : ''}>移除</button>
       </div>`;
 }
-function bindRepoRows() {
-  ui.list.querySelectorAll('[data-imp]').forEach((b) => b.onclick = () => {
+async function importSelected() {
+  if (!ui) return;
+  const boxes = [...ui.list.querySelectorAll('input[data-sel]:checked')];
+  if (!boxes.length) { toast('请先勾选要导入的作品', true); return; }
+  const pkgs = [];
+  for (const b of boxes) {
+    const id = b.dataset.sel;
     if (b.dataset.local === '1') {
-      const p = findLocalPack(b.dataset.imp);
-      if (!p) { toast('本地作品不存在', true); return; }
-      importPackage(p);
-      return;
+      const p = findLocalPack(id);
+      if (!p) { toast('本地作品不存在：' + id, true); continue; }
+      pkgs.push(p);
+      continue;
     }
-    apiDetail(b.dataset.imp).then((x) => importPackage(x.package)).catch((e) => toast('读取作品失败：' + e.message, true));
-  });
+    try {
+      const x = await apiDetail(id);
+      if (x && x.package) pkgs.push(x.package);
+    } catch (e) {
+      toast('读取失败：' + (e && e.message ? e.message : String(e)), true);
+    }
+  }
+  await importMany(pkgs);
+}
+function bindRepoRows() {
   ui.list.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => {
     if (b.dataset.local === '1') { removeLocalPack(b.dataset.del); toast('已移除本地文件'); renderRepo(); return; }
     apiDlDel(b.dataset.del).then(() => { toast('已移除'); renderRepo(); }).catch((e) => toast('移除失败：' + e.message, true));

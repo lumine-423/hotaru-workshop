@@ -1,4 +1,4 @@
-/* hotaru-workshop v2.3.7 —— 夜环工坊壳：正视同心轨道悬浮球 / 悬浮窗 / 扩展条目 */
+/* hotaru-workshop v2.3.9 —— 夜环工坊壳：正视同心轨道悬浮球 / 悬浮窗 / 扩展条目 */
 :root {
     --hwf-bg-0: #0d1322;
     --hwf-bg-1: #182238;
@@ -253,6 +253,15 @@
     padding: 10px 12px; margin-bottom: 8px;
     background: linear-gradient(150deg, var(--hwf-card), var(--hwf-bg-1));
     transition: transform .28s var(--hwf-pop), border-color .22s var(--hwf-ease), box-shadow .22s var(--hwf-ease);
+}
+.hwf-check {
+    display: grid; place-items: center;
+    flex: 0 0 22px;
+}
+.hwf-check input {
+    width: 16px; height: 16px; margin: 0;
+    accent-color: var(--hwf-blue);
+    cursor: pointer;
 }
 .hwf-row:hover {
     transform: translateY(-2px);
