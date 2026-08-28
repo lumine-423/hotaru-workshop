@@ -1,4 +1,4 @@
-/*! hotaru-workshop v2.4.2 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.4.3 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
  *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
  *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
@@ -6,7 +6,7 @@
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOK = '群星的资料库 v4.0';
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.4.2';
+const EXT_VERSION = '2.4.3';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
@@ -20,6 +20,13 @@ function getCtx() {
   return null;
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function isPhoneUi() {
+  try {
+    if (window.matchMedia('(max-width: 720px)').matches) return true;
+    if (window.matchMedia('(hover: none) and (pointer: coarse)').matches && (window.innerWidth || 0) < 1100) return true;
+  } catch { /* ignore */ }
+  return (window.innerWidth || 0) <= 720;
+}
 function toast(msg, err) {
   let t = document.querySelector('.hwf-toast');
   if (!t) { t = document.createElement('div'); t.className = 'hwf-toast'; document.body.appendChild(t); }
@@ -558,8 +565,10 @@ function load(on) { if (ui) ui.loading.style.display = on ? 'flex' : 'none'; }
 function openRepoPanel() {
   if (!ui) buildRepo();
   if (!ui) return;
+  syncPhoneChrome();
   ui.veil.classList.add('on');
   ui.panel.classList.add('open');
+  try { if (isPhoneUi()) document.body.style.overflow = 'hidden'; } catch { /* ignore */ }
   renderRepo();
   syncBallVisibility();
 }
@@ -567,7 +576,19 @@ function closeRepoPanel() {
   if (!ui) return;
   ui.veil.classList.remove('on');
   ui.panel.classList.remove('open');
+  try { document.body.style.overflow = ''; } catch { /* ignore */ }
   syncBallVisibility();
+}
+function syncPhoneChrome() {
+  const on = isPhoneUi();
+  try { document.documentElement.classList.toggle('hwf-phone', on); } catch { /* ignore */ }
+  if (ui && ui.ball) ui.ball.classList.toggle('hwf-phone', on);
+  if (ui && ui.panel) ui.panel.classList.toggle('hwf-phone', on);
+  if (ui && ui.veil) ui.veil.classList.toggle('hwf-phone', on);
+  if (ui && ui.panel) {
+    const openBtn = ui.panel.querySelector('#hwf-open');
+    if (openBtn) openBtn.textContent = on ? '打开工坊网页' : '进入荧荧工坊';
+  }
 }
 
 /* 悬浮球：照搬星海工坊——认当前角色卡（卡名 / 世界书 / 卡内标记），不缓存上下文。 */
@@ -621,8 +642,31 @@ function isHostCardName(n) {
   const s = String(n || '').trim();
   return s === 'Magic Fairy' || s.indexOf('Magic Fairy') === 0;
 }
+function visibleCharName() {
+  const sels = ['#rm_button_selected_ch', '#rm_button_selected_ch .ch_name', '.character_name_block', '#top-bar .ch_name', '#chat_header .name'];
+  for (const s of sels) {
+    try {
+      const el = document.querySelector(s);
+      const t = el && String(el.textContent || '').trim();
+      if (t) return t;
+    } catch { /* ignore */ }
+  }
+  return '';
+}
+function worldbookSelected() {
+  try {
+    const wi = document.querySelector('#world_info');
+    if (!wi) return '';
+    const opt = wi.options && wi.selectedIndex >= 0 ? wi.options[wi.selectedIndex] : null;
+    return String((opt && (opt.text || opt.value)) || wi.value || '');
+  } catch { return ''; }
+}
 function isCurrentWorkshopCard() {
   try { if (document.getElementById('hwf-workshop')) return true; } catch { /* ignore */ }
+  try {
+    if (isHostCardName(visibleCharName())) return true;
+    if (String(worldbookSelected()).indexOf('群星的资料库') !== -1) return true;
+  } catch { /* ignore */ }
   const ch = currentCharacter();
   if (!ch) return false;
   let hay = '';
@@ -664,42 +708,84 @@ function pickImportFile() {
   ui.file.value = '';
   ui.file.click();
 }
+function readFileAsText(file) {
+  if (file && typeof file.text === 'function') return file.text();
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(r.error || new Error('读取失败'));
+    r.readAsText(file);
+  });
+}
 async function onImportFilePicked(ev) {
-  const file = ev.target && ev.target.files && ev.target.files[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const packs = parseImportFile(text);
-    upsertLocalPacks(packs);
-    toast('已导入 ' + packs.length + ' 件本地作品，可点「导入世界书」');
-    renderRepo();
-  } catch (e) {
-    toast('导入文件失败：' + (e && e.message ? e.message : String(e)), true);
+  const files = ev.target && ev.target.files ? [...ev.target.files] : [];
+  if (!files.length) return;
+  const packs = [];
+  const failed = [];
+  for (const file of files) {
+    try {
+      const text = await readFileAsText(file);
+      packs.push(...parseImportFile(text));
+    } catch (e) {
+      failed.push((file && file.name ? file.name : '文件') + '：' + (e && e.message ? e.message : String(e)));
+    }
   }
+  if (packs.length) {
+    upsertLocalPacks(packs);
+    toast('已加入 ' + packs.length + ' 件本地作品，勾选后点「导入选中」写入世界书');
+    renderRepo();
+  }
+  if (failed.length) toast(failed.join('\n'), true);
+}
+function sendFormBottom() {
+  try {
+    const el = document.getElementById('send_form') || document.getElementById('form_sheld');
+    if (!el) return 0;
+    const h = el.getBoundingClientRect().height;
+    return h > 24 && h < 280 ? Math.round(h) : 0;
+  } catch { return 0; }
 }
 function bindFabDrag(ball, panel) {
-  const POS_KEY = 'hwf_fab_pos_v1';
-  const DEFAULT_R = 8;
-  const DEFAULT_B = 148;
+  const POS_KEY = 'hwf_fab_pos_v2';
+  function defaultR() { return 10; }
+  function defaultB() {
+    const extra = sendFormBottom();
+    const safe = isPhoneUi() ? 12 : 8;
+    return Math.max(isPhoneUi() ? 72 : 148, extra + safe);
+  }
   function size() {
-    return { w: ball.offsetWidth || 96, h: ball.offsetHeight || 96 };
+    return { w: ball.offsetWidth || (isPhoneUi() ? 68 : 96), h: ball.offsetHeight || (isPhoneUi() ? 68 : 96) };
+  }
+  function viewSize() {
+    try {
+      const vv = window.visualViewport;
+      if (vv && vv.width && vv.height) return { w: vv.width, h: vv.height };
+    } catch { /* ignore */ }
+    return { w: window.innerWidth || 360, h: window.innerHeight || 640 };
   }
   function clamp(right, bottom) {
     const s = size();
-    const maxR = Math.max(8, (window.innerWidth || 360) - s.w - 8);
-    const maxB = Math.max(8, (window.innerHeight || 640) - s.h - 8);
+    const v = viewSize();
+    const pad = 8;
+    const maxR = Math.max(pad, v.w - s.w - pad);
+    const maxB = Math.max(pad, v.h - s.h - pad);
     return {
-      right: Math.round(Math.min(maxR, Math.max(8, right))),
-      bottom: Math.round(Math.min(maxB, Math.max(8, bottom))),
+      right: Math.round(Math.min(maxR, Math.max(pad, right))),
+      bottom: Math.round(Math.min(maxB, Math.max(pad, bottom))),
     };
   }
   function save() {
     try {
       localStorage.setItem(POS_KEY, JSON.stringify({
-        right: parseFloat(ball.style.right) || DEFAULT_R,
-        bottom: parseFloat(ball.style.bottom) || DEFAULT_B,
+        right: parseFloat(ball.style.right) || defaultR(),
+        bottom: parseFloat(ball.style.bottom) || defaultB(),
       }));
     } catch { /* ignore */ }
+  }
+  function applyDefault() {
+    const c = clamp(defaultR(), defaultB());
+    ball.style.right = c.right + 'px';
+    ball.style.bottom = c.bottom + 'px';
   }
   try {
     const raw = localStorage.getItem(POS_KEY);
@@ -709,26 +795,28 @@ function bindFabDrag(ball, panel) {
         const c = clamp(Number(p.right), Number(p.bottom));
         ball.style.right = c.right + 'px';
         ball.style.bottom = c.bottom + 'px';
-      }
-    }
-  } catch { /* ignore */ }
+      } else applyDefault();
+    } else applyDefault();
+  } catch { applyDefault(); }
   let drag = null;
+  const slop = () => (isPhoneUi() ? 196 : 36);
   ball.addEventListener('pointerdown', (e) => {
     if (e.button != null && e.button !== 0) return;
     drag = {
       x: e.clientX,
       y: e.clientY,
       moved: false,
-      r: parseFloat(ball.style.right) || DEFAULT_R,
-      b: parseFloat(ball.style.bottom) || DEFAULT_B,
+      r: parseFloat(ball.style.right) || defaultR(),
+      b: parseFloat(ball.style.bottom) || defaultB(),
     };
     try { ball.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-  });
+    if (e.pointerType === 'touch' && e.cancelable) e.preventDefault();
+  }, { passive: false });
   ball.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
-    if (!drag.moved && (dx * dx + dy * dy) < 36) return;
+    if (!drag.moved && (dx * dx + dy * dy) < slop()) return;
     drag.moved = true;
     ball.classList.add('is-dragging');
     const c = clamp(drag.r - dx, drag.b - dy);
@@ -752,11 +840,14 @@ function bindFabDrag(ball, panel) {
     drag = null;
     ball.classList.remove('is-dragging');
   });
-  window.addEventListener('resize', () => {
-    const c = clamp(parseFloat(ball.style.right) || DEFAULT_R, parseFloat(ball.style.bottom) || DEFAULT_B);
+  const reclamp = () => {
+    syncPhoneChrome();
+    const c = clamp(parseFloat(ball.style.right) || defaultR(), parseFloat(ball.style.bottom) || defaultB());
     ball.style.right = c.right + 'px';
     ball.style.bottom = c.bottom + 'px';
-  });
+  };
+  window.addEventListener('resize', reclamp);
+  try { if (window.visualViewport) window.visualViewport.addEventListener('resize', reclamp); } catch { /* ignore */ }
   ball.addEventListener('click', (e) => {
     if (ball.dataset.dragged === '1') {
       delete ball.dataset.dragged;
@@ -805,10 +896,13 @@ function buildRepo() {
     <div class="hwf-loading">加载中…</div>`;
   const file = document.createElement('input');
   file.type = 'file';
-  file.accept = '.json,application/json';
-  file.style.display = 'none';
+  file.accept = '.json,application/json,text/plain';
+  file.multiple = true;
+  file.className = 'hwf-file';
+  file.setAttribute('aria-hidden', 'true');
   document.body.append(ball, veil, panel, file);
   ui = { ball, veil, panel, file, login: panel.querySelector('#hwf-login'), list: panel.querySelector('#hwf-list'), loading: panel.querySelector('.hwf-loading') };
+  syncPhoneChrome();
   bindFabDrag(ball, panel);
   veil.addEventListener('click', closeRepoPanel);
   panel.querySelector('#hwf-close').addEventListener('click', closeRepoPanel);
@@ -860,11 +954,19 @@ function bindRepoRows() {
 }
 function renderRepo() {
   if (!ui) return;
+  syncPhoneChrome();
+  const phone = isPhoneUi();
   const av = settings.user && settings.user.avatar
     ? 'https://cdn.discordapp.com/avatars/' + encodeURIComponent(settings.user.id) + '/' + encodeURIComponent(settings.user.avatar) + '.png?size=64' : '';
-  ui.login.innerHTML = settings.user
-    ? (av ? '<img class="hwf-avatar" src="' + av + '" alt="">' : '') + '<span>' + esc(settings.user.displayName || settings.user.username) + (settings.admin ? ' · 管理员' : '') + '</span> <button class="hwf-mini" id="hwf-logout">退出</button>'
-    : '<span>未登录也可以「导入文件」；云端下载列表需要登录</span> <button class="hwf-mini" id="hwf-login-btn">Discord 登录</button>';
+  if (phone) {
+    ui.login.innerHTML = settings.user
+      ? (av ? '<img class="hwf-avatar" src="' + av + '" alt="">' : '') + '<span>' + esc(settings.user.displayName || settings.user.username) + (settings.admin ? ' · 管理员' : '') + '</span>'
+      : '<span>手机请先在工坊网页点「导出文件」，再点「导入文件」。无需登录。</span>';
+  } else {
+    ui.login.innerHTML = settings.user
+      ? (av ? '<img class="hwf-avatar" src="' + av + '" alt="">' : '') + '<span>' + esc(settings.user.displayName || settings.user.username) + (settings.admin ? ' · 管理员' : '') + '</span> <button class="hwf-mini" id="hwf-logout">退出</button>'
+      : '<span>未登录也可以「导入文件」；云端下载列表需要登录</span> <button class="hwf-mini" id="hwf-login-btn">Discord 登录</button>';
+  }
   const lo = ui.login.querySelector('#hwf-logout'); if (lo) lo.onclick = logout;
   const lb = ui.login.querySelector('#hwf-login-btn'); if (lb) lb.onclick = beginLogin;
   const local = loadLocalPacks();
@@ -874,15 +976,17 @@ function renderRepo() {
     const localOnly = local.filter((p) => !cloudIds.has(String(p.id)));
     const html = localOnly.map((p) => rowHtml(p, true)).join('') + cloudList.map((p) => rowHtml(p, false)).join('');
     if (!html) {
-      ui.list.innerHTML = settings.user
-        ? '<div class="hwf-empty">还没有下载内容\n去云端工坊逛逛，或点「导入文件」</div>'
-        : '<div class="hwf-empty">点「导入文件」，把网页工坊导出的 JSON 加进来\n无需登录也能导入世界书</div>';
+      ui.list.innerHTML = phone
+        ? '<div class="hwf-empty">点「打开工坊网页」导出 JSON，再点「导入文件」加进仓库\n勾选后点「导入选中」写入世界书</div>'
+        : (settings.user
+          ? '<div class="hwf-empty">还没有下载内容\n去云端工坊逛逛，或点「导入文件」</div>'
+          : '<div class="hwf-empty">点「导入文件」，把网页工坊导出的 JSON 加进来\n无需登录也能导入世界书</div>');
       return;
     }
     ui.list.innerHTML = html;
     bindRepoRows();
   };
-  if (!settings.user) { paintLocal([]); return; }
+  if (!settings.user || phone) { paintLocal([]); return; }
   ui.list.innerHTML = '<div class="hwf-empty">加载中…</div>';
   apiDownloads().then((d) => paintLocal(d.downloads || [])).catch((e) => {
     if (local.length) { paintLocal([]); toast('云端列表读取失败，仍显示本地文件', true); }
@@ -1026,6 +1130,7 @@ function startup() {
   started = true;
   loadSettings();
   buildRepo();
+  syncPhoneChrome();
   /* 与云端网页双向登录同步（postMessage；网页由本插件打开，opener 即本页） */
   const webOrigin = (() => { try { return new URL(settings.gateway).origin; } catch { return ''; } })();
   window.addEventListener('message', (ev) => {
