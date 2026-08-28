@@ -1,4 +1,4 @@
-/*! hotaru-workshop v2.4.3 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.4.4 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
  *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
  *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
@@ -6,11 +6,13 @@
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOK = '群星的资料库 v4.0';
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.4.3';
+const EXT_VERSION = '2.4.4';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
 let settings = {};
+let ui = null;
+let healTimer = null;
 const knownWebWindows = new Set(); /* 云端网页窗口登记：登录/退出时向其广播（postMessage 双向同步） */
 
 function getCtx() {
@@ -28,10 +30,25 @@ function isPhoneUi() {
   return (window.innerWidth || 0) <= 720;
 }
 function toast(msg, err) {
-  let t = document.querySelector('.hwf-toast');
-  if (!t) { t = document.createElement('div'); t.className = 'hwf-toast'; document.body.appendChild(t); }
+  let t = (ui && ui.root) ? ui.root.querySelector('.hwf-toast') : document.querySelector('.hwf-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.className = 'hwf-toast';
+    (ui && ui.root ? ui.root : document.documentElement).appendChild(t);
+  }
   t.textContent = msg; t.classList.toggle('hwf-toast-error', !!err); t.classList.add('hwf-toast-show');
   clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('hwf-toast-show'), 3200);
+}
+function getViewport() {
+  try {
+    const vv = window.visualViewport;
+    if (vv && vv.width) return { w: Math.round(vv.width), h: Math.round(vv.height) };
+  } catch { /* ignore */ }
+  try {
+    const de = document.documentElement;
+    if (de && de.clientWidth) return { w: de.clientWidth, h: de.clientHeight };
+  } catch { /* ignore */ }
+  return { w: window.innerWidth || 360, h: window.innerHeight || 640 };
 }
 
 /* ---------- 与云端网页的登录双向同步 ---------- */
@@ -559,7 +576,6 @@ async function importMany(pkgs) {
 }
 
 /* ---------- 本地仓库悬浮窗 ---------- */
-let ui = null;
 let started = false;
 function load(on) { if (ui) ui.loading.style.display = on ? 'flex' : 'none'; }
 function openRepoPanel() {
@@ -582,6 +598,7 @@ function closeRepoPanel() {
 function syncPhoneChrome() {
   const on = isPhoneUi();
   try { document.documentElement.classList.toggle('hwf-phone', on); } catch { /* ignore */ }
+  if (ui && ui.root) ui.root.classList.toggle('hwf-phone', on);
   if (ui && ui.ball) ui.ball.classList.toggle('hwf-phone', on);
   if (ui && ui.panel) ui.panel.classList.toggle('hwf-phone', on);
   if (ui && ui.veil) ui.veil.classList.toggle('hwf-phone', on);
@@ -683,9 +700,9 @@ function syncBallVisibility() {
   if (!ui) return;
   const on = isCurrentWorkshopCard();
   const panelOpen = ui.panel.classList.contains('open');
-  const hide = !on || panelOpen;
-  ui.ball.setAttribute('data-hidden', hide ? '1' : '0');
-  ui.ball.setAttribute('aria-hidden', hide ? 'true' : 'false');
+  ui.root.dataset.open = panelOpen ? 'true' : 'false';
+  ui.ball.setAttribute('data-hidden', on ? '0' : '1');
+  ui.ball.setAttribute('aria-hidden', on ? 'false' : 'true');
 }
 function onCharacterContextChanged() {
   if (ui && ui.panel.classList.contains('open') && !isCurrentWorkshopCard()) closeRepoPanel();
@@ -737,114 +754,107 @@ async function onImportFilePicked(ev) {
   }
   if (failed.length) toast(failed.join('\n'), true);
 }
-function sendFormBottom() {
-  try {
-    const el = document.getElementById('send_form') || document.getElementById('form_sheld');
-    if (!el) return 0;
-    const h = el.getBoundingClientRect().height;
-    return h > 24 && h < 280 ? Math.round(h) : 0;
-  } catch { return 0; }
-}
 function bindFabDrag(ball, panel) {
-  const POS_KEY = 'hwf_fab_pos_v2';
-  function defaultR() { return 10; }
-  function defaultB() {
-    const extra = sendFormBottom();
-    const safe = isPhoneUi() ? 12 : 8;
-    return Math.max(isPhoneUi() ? 72 : 148, extra + safe);
-  }
+  const POS_KEY = 'hwf_fab_pos_v3';
+  const pad = 10;
   function size() {
-    return { w: ball.offsetWidth || (isPhoneUi() ? 68 : 96), h: ball.offsetHeight || (isPhoneUi() ? 68 : 96) };
+    const n = isPhoneUi() ? 56 : 96;
+    return { w: ball.offsetWidth || n, h: ball.offsetHeight || n };
   }
-  function viewSize() {
-    try {
-      const vv = window.visualViewport;
-      if (vv && vv.width && vv.height) return { w: vv.width, h: vv.height };
-    } catch { /* ignore */ }
-    return { w: window.innerWidth || 360, h: window.innerHeight || 640 };
-  }
-  function clamp(right, bottom) {
+  function clampPos(left, top) {
     const s = size();
-    const v = viewSize();
-    const pad = 8;
-    const maxR = Math.max(pad, v.w - s.w - pad);
-    const maxB = Math.max(pad, v.h - s.h - pad);
+    const v = getViewport();
     return {
-      right: Math.round(Math.min(maxR, Math.max(pad, right))),
-      bottom: Math.round(Math.min(maxB, Math.max(pad, bottom))),
+      left: Math.round(Math.min(Math.max(pad, left), Math.max(pad, v.w - s.w - pad))),
+      top: Math.round(Math.min(Math.max(pad, top), Math.max(pad, v.h - s.h - pad))),
     };
+  }
+  function apply(left, top) {
+    const c = clampPos(left, top);
+    ball.style.left = c.left + 'px';
+    ball.style.top = c.top + 'px';
+    ball.style.right = 'auto';
+    ball.style.bottom = 'auto';
+    return c;
+  }
+  function defaultPos() {
+    const s = size();
+    const v = getViewport();
+    return { left: v.w - s.w - 16, top: Math.round(v.h * 0.34) };
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(POS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p && isFinite(Number(p.left)) && isFinite(Number(p.top))) {
+          apply(Number(p.left), Number(p.top));
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    const d = defaultPos();
+    apply(d.left, d.top);
   }
   function save() {
     try {
       localStorage.setItem(POS_KEY, JSON.stringify({
-        right: parseFloat(ball.style.right) || defaultR(),
-        bottom: parseFloat(ball.style.bottom) || defaultB(),
+        left: parseFloat(ball.style.left) || defaultPos().left,
+        top: parseFloat(ball.style.top) || defaultPos().top,
       }));
     } catch { /* ignore */ }
   }
-  function applyDefault() {
-    const c = clamp(defaultR(), defaultB());
-    ball.style.right = c.right + 'px';
-    ball.style.bottom = c.bottom + 'px';
-  }
-  try {
-    const raw = localStorage.getItem(POS_KEY);
-    if (raw) {
-      const p = JSON.parse(raw);
-      if (p && isFinite(Number(p.right)) && isFinite(Number(p.bottom))) {
-        const c = clamp(Number(p.right), Number(p.bottom));
-        ball.style.right = c.right + 'px';
-        ball.style.bottom = c.bottom + 'px';
-      } else applyDefault();
-    } else applyDefault();
-  } catch { applyDefault(); }
+  load();
   let drag = null;
-  const slop = () => (isPhoneUi() ? 196 : 36);
-  ball.addEventListener('pointerdown', (e) => {
-    if (e.button != null && e.button !== 0) return;
+  const slop = () => (isPhoneUi() ? 16 : 8);
+  function pt(e) {
+    const t = e.touches && e.touches[0] ? e.touches[0] : e;
+    return { x: t.clientX, y: t.clientY };
+  }
+  function start(e) {
+    if (e.type === 'mousedown') {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+    }
+    const p = pt(e);
     drag = {
-      x: e.clientX,
-      y: e.clientY,
+      x: p.x,
+      y: p.y,
       moved: false,
-      r: parseFloat(ball.style.right) || defaultR(),
-      b: parseFloat(ball.style.bottom) || defaultB(),
+      left: parseFloat(ball.style.left) || defaultPos().left,
+      top: parseFloat(ball.style.top) || defaultPos().top,
     };
-    try { ball.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    if (e.pointerType === 'touch' && e.cancelable) e.preventDefault();
-  }, { passive: false });
-  ball.addEventListener('pointermove', (e) => {
+  }
+  function move(e) {
     if (!drag) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
+    const p = pt(e);
+    const dx = p.x - drag.x;
+    const dy = p.y - drag.y;
     if (!drag.moved && (dx * dx + dy * dy) < slop()) return;
     drag.moved = true;
     ball.classList.add('is-dragging');
-    const c = clamp(drag.r - dx, drag.b - dy);
-    ball.style.right = c.right + 'px';
-    ball.style.bottom = c.bottom + 'px';
-  });
-  function endDrag(e) {
+    apply(drag.left + dx, drag.top + dy);
+  }
+  function end() {
     if (!drag) return;
     const moved = drag.moved;
-    try { if (e) ball.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     ball.classList.remove('is-dragging');
     if (moved) {
       save();
       ball.dataset.dragged = '1';
-      if (e && e.preventDefault) e.preventDefault();
     }
     drag = null;
   }
-  ball.addEventListener('pointerup', endDrag);
-  ball.addEventListener('pointercancel', () => {
-    drag = null;
-    ball.classList.remove('is-dragging');
-  });
+  ball.addEventListener('mousedown', start);
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  ball.addEventListener('touchstart', start, { passive: true });
+  window.addEventListener('touchmove', move, { passive: true });
+  window.addEventListener('touchend', end);
+  window.addEventListener('touchcancel', end);
   const reclamp = () => {
     syncPhoneChrome();
-    const c = clamp(parseFloat(ball.style.right) || defaultR(), parseFloat(ball.style.bottom) || defaultB());
-    ball.style.right = c.right + 'px';
-    ball.style.bottom = c.bottom + 'px';
+    apply(parseFloat(ball.style.left) || defaultPos().left, parseFloat(ball.style.top) || defaultPos().top);
   };
   window.addEventListener('resize', reclamp);
   try { if (window.visualViewport) window.visualViewport.addEventListener('resize', reclamp); } catch { /* ignore */ }
@@ -859,9 +869,22 @@ function bindFabDrag(ball, panel) {
     else openRepoPanel();
   });
 }
+function hostEl() {
+  return document.documentElement || document.body;
+}
+function healDom() {
+  if (!ui || !ui.root) return;
+  const host = hostEl();
+  if (!host) return;
+  if (ui.root.parentNode !== host) host.appendChild(ui.root);
+}
 function buildRepo() {
-  if (ui) return;
-  if (!document.body) { setTimeout(buildRepo, 300); return; }
+  if (ui) { healDom(); return; }
+  const host = hostEl();
+  if (!host) { setTimeout(buildRepo, 300); return; }
+  const root = document.createElement('div');
+  root.id = 'hwf-root';
+  root.dataset.open = 'false';
   const ball = document.createElement('button');
   ball.id = 'hwf-fab';
   ball.type = 'button';
@@ -900,8 +923,9 @@ function buildRepo() {
   file.multiple = true;
   file.className = 'hwf-file';
   file.setAttribute('aria-hidden', 'true');
-  document.body.append(ball, veil, panel, file);
-  ui = { ball, veil, panel, file, login: panel.querySelector('#hwf-login'), list: panel.querySelector('#hwf-list'), loading: panel.querySelector('.hwf-loading') };
+  root.append(ball, veil, panel, file);
+  host.appendChild(root);
+  ui = { root, ball, veil, panel, file, login: panel.querySelector('#hwf-login'), list: panel.querySelector('#hwf-list'), loading: panel.querySelector('.hwf-loading') };
   syncPhoneChrome();
   bindFabDrag(ball, panel);
   veil.addEventListener('click', closeRepoPanel);
@@ -913,6 +937,8 @@ function buildRepo() {
   panel.querySelector('#hwf-update').addEventListener('click', () => doUpdate(panel));
   file.addEventListener('change', onImportFilePicked);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && panel.classList.contains('open')) closeRepoPanel(); });
+  window.addEventListener('pageshow', healDom);
+  if (!healTimer) healTimer = setInterval(healDom, 2000);
   syncBallVisibility();
 }
 function rowHtml(p, local) {
