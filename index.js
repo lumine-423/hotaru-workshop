@@ -1,12 +1,18 @@
-/*! hotaru-workshop v2.4.4 —— 本地仓库壳 + 云端荧荧工坊入口
- * 结构：悬浮球 = 本地仓库（只在角色卡 Magic Fairy 上显示，对照星海工坊绑「魔法少女MVU测试」）
+/*! hotaru-workshop v2.9.1 —— 本地仓库壳 + 云端荧荧工坊入口
+ * 结构：悬浮球 = 本地仓库（只绑定白名单角色卡：Magic Fairy / 艾瑟拉；其余卡与主页完全不渲染、不可点）
+ *       仓库 = 按卡分仓（magic-fairy / aethera），云端下载与本地导入都只进当前卡自己的仓
+ *       导入 = 双管线：MF 走原管线（群星的资料库 v4.0，不再改动）；
+ *              艾瑟拉：角色→世界书（DLC控制器/DLC角色速览），刻印(blueprint)→刻印工坊存档合并（academy.frontend.v3）
+ *              艾瑟拉走新管线（目标=卡绑定世界书；角色进 /角色组；控制器=DLC控制器 + DLC角色速览）
  *       扩展条目 = 星海式设置卡片（打开仓库 / 进入工坊 / 检查更新 / 更新）
- *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/
+ *       真正的工坊 = 云端网页 https://workshop.hotaruworkshop.l.cd/（打开时带 ?scope= 同步板块）
  */
 const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
-const WORLDBOOK = '群星的资料库 v4.0';
+/* 每个板块写进自己的世界书：Magic Fairy 固定；艾瑟拉跟随卡绑定（activeWorldbook 动态解析） */
+const WORLDBOOKS = { 'magic-fairy': '群星的资料库 v4.0', 'aethera': '艾瑟拉世界 v1.1' };
+const WORLDBOOK = WORLDBOOKS['magic-fairy']; /* 旧字段兼容 */
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.4.4';
+const EXT_VERSION = '2.9.1';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
@@ -98,15 +104,19 @@ const apiFavDel = (id) => api('/api/workshop/me/favs/' + encodeURIComponent(id),
 const apiDlAdd = (id) => api('/api/workshop/me/downloads', { method: 'POST', body: { packageId: id } });
 const apiDlDel = (id) => api('/api/workshop/me/downloads/' + encodeURIComponent(id), { method: 'DELETE' });
 
-/* ---------- 本地文件仓库（给没法跳转登录的玩家：网页导出 JSON → 这里导入） ---------- */
+/* ---------- 本地文件仓库（给没法跳转登录的玩家：网页导出 JSON → 这里导入） ----------
+   按板块分仓：magic-fairy 沿用旧键（老玩家的本地文件自动归入 MF 仓），aethera 独立键，互不可见。 */
 const LOCAL_PACKS_KEY = 'hwLocalPacks';
-function loadLocalPacks() {
+function localPacksKey(scope) {
+  return scope === 'aethera' ? 'hwLocalPacks:aethera' : LOCAL_PACKS_KEY;
+}
+function loadLocalPacks(scope) {
   try {
-    const list = JSON.parse(localStorage.getItem(LOCAL_PACKS_KEY) || '[]');
+    const list = JSON.parse(localStorage.getItem(localPacksKey(scope)) || '[]');
     return Array.isArray(list) ? list : [];
   } catch { return []; }
 }
-function saveLocalPacks(list) { try { localStorage.setItem(LOCAL_PACKS_KEY, JSON.stringify(list || [])); } catch { /* ignore */ } }
+function saveLocalPacks(list, scope) { try { localStorage.setItem(localPacksKey(scope), JSON.stringify(list || [])); } catch { /* ignore */ } }
 function takePack(p, out) {
   if (!p || typeof p !== 'object') return;
   if (!p.title && !(p.payload)) return;
@@ -123,21 +133,21 @@ function parseImportFile(text) {
   if (!packs.length) throw new Error('文件里没有可导入的作品');
   return packs;
 }
-function upsertLocalPacks(incoming) {
-  const cur = loadLocalPacks();
+function upsertLocalPacks(incoming, scope) {
+  const cur = loadLocalPacks(scope);
   for (const p of incoming) {
     const id = String(p.id || ('local.' + Date.now() + '.' + Math.random().toString(16).slice(2)));
     p.id = id;
     const i = cur.findIndex((x) => String(x.id) === id);
     if (i >= 0) cur[i] = p; else cur.push(p);
   }
-  saveLocalPacks(cur);
+  saveLocalPacks(cur, scope);
   return cur;
 }
-function removeLocalPack(id) {
-  saveLocalPacks(loadLocalPacks().filter((p) => String(p.id) !== String(id)));
+function removeLocalPack(id, scope) {
+  saveLocalPacks(loadLocalPacks(scope).filter((p) => String(p.id) !== String(id)), scope);
 }
-function findLocalPack(id) { return loadLocalPacks().find((p) => String(p.id) === String(id)) || null; }
+function findLocalPack(id, scope) { return loadLocalPacks(scope).find((p) => String(p.id) === String(id)) || null; }
 
 /* ---------- 登录（桥） ---------- */
 const PENDING_KEY = 'hwPendingKey'; /* 同步 localStorage：ST 设置保存是 1 秒防抖，页面跳去 Discord 前根本来不及落盘 */
@@ -224,21 +234,44 @@ function entryMetaOf(entry) {
   }
   return null;
 }
+/* 当前生效的导入目标世界书：
+   Magic Fairy → 固定《群星的资料库 v4.0》（MF 部分不再改动）；
+   艾瑟拉 → 跟随当前卡绑定的世界书（data.extensions.world / character_book），不写死名称，
+   卡以后升级换书（v1.2/v2.0…）导入目标自动跟着走，绑错书是不可能的。 */
+function activeWorldbook() {
+  const scope = currentCardScope() || 'magic-fairy';
+  if (scope === 'aethera') {
+    let bound = '';
+    try {
+      const ch = currentCharacter();
+      if (ch && ch.data) {
+        bound = (ch.data.extensions && ch.data.extensions.world)
+          || (ch.data.character_book && ch.data.character_book.name)
+          || '';
+      }
+    } catch { /* ignore */ }
+    if (bound) return String(bound);
+    return WORLDBOOKS['aethera'] || WORLDBOOK;
+  }
+  return WORLDBOOKS[scope] || WORLDBOOK;
+}
 async function loadWorldbook() {
   const c = getCtx();
+  const wb = activeWorldbook();
   if (c && typeof c.getWorldInfoNames === 'function') {
     const names = c.getWorldInfoNames();
-    if (names && Array.isArray(names) && !names.some((n) => String(n) === settings.worldbook)) throw new Error('找不到世界书「' + settings.worldbook + '」');
+    if (names && Array.isArray(names) && !names.some((n) => String(n) === wb)) throw new Error('找不到世界书「' + wb + '」');
   }
-  if (c && typeof c.loadWorldInfo === 'function') { const d = await c.loadWorldInfo(settings.worldbook); if (d) return d; throw new Error('世界书读取失败'); }
-  const res = await fetch('/api/worldinfo/get', { method: 'POST', headers: c && c.getRequestHeaders ? c.getRequestHeaders() : {}, body: JSON.stringify({ name: settings.worldbook }) });
+  if (c && typeof c.loadWorldInfo === 'function') { const d = await c.loadWorldInfo(wb); if (d) return d; throw new Error('世界书读取失败'); }
+  const res = await fetch('/api/worldinfo/get', { method: 'POST', headers: c && c.getRequestHeaders ? c.getRequestHeaders() : {}, body: JSON.stringify({ name: wb }) });
   if (!res.ok) throw new Error('世界书读取失败 HTTP ' + res.status);
   return res.json();
 }
 async function saveWorldbook(data) {
   const c = getCtx();
-  if (c && typeof c.saveWorldInfo === 'function') { await c.saveWorldInfo(settings.worldbook, data, true); return; }
-  const res = await fetch('/api/worldinfo/edit', { method: 'POST', headers: c && c.getRequestHeaders ? c.getRequestHeaders() : {}, body: JSON.stringify({ name: settings.worldbook, data }) });
+  const wb = activeWorldbook();
+  if (c && typeof c.saveWorldInfo === 'function') { await c.saveWorldInfo(wb, data, true); return; }
+  const res = await fetch('/api/worldinfo/edit', { method: 'POST', headers: c && c.getRequestHeaders ? c.getRequestHeaders() : {}, body: JSON.stringify({ name: wb, data }) });
   if (!res.ok) throw new Error('世界书保存失败 HTTP ' + res.status);
 }
 function entryTemplate() {
@@ -465,7 +498,9 @@ function applyPackageToWorldbook(data, pkg) {
   if (!['character', 'faction', 'event', 'gameplay', 'rule', 'other'].includes(cat)) throw new Error('该类型暂不支持导入（' + cat + '）');
   const base = metaOf(pkg, { name: '' });
   if (cat === 'character') {
-    const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [pkg.title];
+    /* ★ 1011d：角色名只用填写的「角色名（控制器）」，绝不拿作品标题顶替 */
+    const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [];
+    if (!roleNames.length) throw new Error('未填写「角色名（控制器）」—— 它就是这个角色的真名，立绘和世界书都用它');
     const overview = String(extra.overview || extra.intro || '');
     const archive = String(extra.archive || extra.daily || extra.content || extra.summary || '').trim();
     let wrote = 0;
@@ -551,10 +586,107 @@ function rebuildSharedEntries(data, pkg) {
     }));
   }
 }
+
+/* ══════ 艾瑟拉板块导入（独立管线；MF 的 applyPackageToWorldbook / rebuildSharedEntries 不改动） ══════
+   与 MF 的三点不同：
+   1. 目标世界书不写死，跟随艾瑟拉卡绑定（见 activeWorldbook）；
+   2. 角色解锁判断走艾瑟拉原生 /角色组（AI 首次登场建档即视为解锁），没有 stat_data.DLC.* 那层；
+   3. 控制器与速览是艾瑟拉自己的条目（DLC控制器 / DLC角色速览），不碰 MF 的 DLC角色控制器 / DLC角色速览。 */
+const AETHERA_NATIVE_CHARS = ['凛零', '梅林', '墨华', '冰糖', '安克', '卡斯特', '茧', '明空', '艾利丝', '路西法', '暧', '叶', '瓦尔基里'];
+const AETHERA_DLC_OVERVIEW_HEADER = `DLC角色速览:
+  角色初始变量设置: 当角色初次登场后，按照「角色组更新规则」一次性建档，写入 stat_data/角色组/<角色名>/（五字段缺一不可）
+  {角色名}:
+    简介: string
+    当前形态: 日常
+    好感度: 0
+    色情值: 0
+    已解锁性癖: []`;
+
+function applyPackageToWorldbookAethera(data, pkg) {
+  const cat = pkg.category || pkg.type;
+  const extra = pkg.payload && pkg.payload.extra ? pkg.payload.extra : {};
+  if (cat !== 'character') throw new Error('艾瑟拉板块目前只开放「角色」导入（' + cat + ' 还没适配）');
+  /* ★ 1011d：角色名只用填写的「角色名（控制器）」，绝不拿作品标题顶替 */
+  const roleNames = Array.isArray(extra.roleNames) && extra.roleNames.length ? extra.roleNames : [];
+  if (!roleNames.length) throw new Error('未填写「角色名（控制器）」—— 它就是这个角色的真名，立绘和状态栏都用它');
+  const overview = String(extra.overview || extra.intro || '');
+  const archive = String(extra.archive || extra.daily || extra.content || extra.summary || '').trim();
+  const clash = roleNames.filter((rn) => AETHERA_NATIVE_CHARS.includes(rn));
+  if (clash.length) throw new Error('「' + clash.join('、') + '」是艾瑟拉原生角色，工坊作品不能占用这个名字');
+  const base = metaOf(pkg, { name: '' });
+  for (const rn of roleNames) {
+    const name = 'DLC/' + rn;
+    const entry = upsertEntry(data, name, {});
+    stampEntry(entry, name, Object.assign({}, base, {
+      name, roleNames: [rn], category: 'character', overview,
+    }), Object.assign(closedOff(), {
+      content: wrapNamed('DLC_' + rn, archive || overview),
+    }));
+  }
+}
+function aetheraDlcControllerCode(names) {
+  const list = (names || []).map(jsQuote).join(', ');
+  return `@@preprocessing
+<%
+function getVal(path) {
+    try {
+        return getvar(path, { defaults: undefined });
+    } catch(e) {
+        return undefined;
+    }
+}
+var 名册 = getVal('stat_data.角色组');
+if (!名册 || typeof 名册 !== 'object' || Array.isArray(名册)) {
+    名册 = {};
+}
+var dlcCharacters = [${list}];
+var activated = [];
+dlcCharacters.forEach(function(name) {
+    if (名册[name]) {
+        activated.push('DLC/' + name);
+    }
+});
+if (activated.length > 0) {
+    for (var i = 0; i < activated.length; i++) {
+%>
+<rule_动态内容_<%= activated[i] %>>
+<%- await getwi(activated[i]) %>
+</rule_动态内容_<%= activated[i] %>>
+<%
+    }
+}
+%>`;
+}
+function rebuildSharedEntriesAethera(data, pkg) {
+  const base = metaOf(pkg || { series: 'aethera', id: '', revision: 0, contentHash: '' }, {});
+  const chars = findManaged(data).filter((it) => it.meta.category === 'character' && it.meta.name && it.meta.name.indexOf('DLC/') === 0);
+  const extras = [];
+  const seen = new Set();
+  for (const x of chars) {
+    const rn = (x.meta.roleNames && x.meta.roleNames[0]) || String(x.meta.name || '').slice(4);
+    if (!rn || seen.has(rn) || AETHERA_NATIVE_CHARS.includes(rn)) continue;
+    seen.add(rn);
+    extras.push({ name: rn, overview: x.meta.overview || '' });
+  }
+  const extraBlocks = extras.map(formatExtraOverview).filter(Boolean);
+  const overviewBody = extraBlocks.length
+    ? AETHERA_DLC_OVERVIEW_HEADER + '\n\n' + extraBlocks.join('\n\n')
+    : AETHERA_DLC_OVERVIEW_HEADER;
+  const ov = upsertShared(data, ['DLC角色速览'], {});
+  stampEntry(ov, 'DLC角色速览', Object.assign({}, base, { name: 'DLC角色速览', category: 'character' }), Object.assign(blueOn(1001), {
+    content: wrapNamed('DLC角色速览', overviewBody),
+  }));
+  const ctrl = upsertShared(data, ['DLC控制器'], {});
+  stampEntry(ctrl, 'DLC控制器', Object.assign({}, base, { name: 'DLC控制器', category: 'character' }), Object.assign(blueOn(12), {
+    content: aetheraDlcControllerCode(extras.map((e) => e.name)),
+  }));
+}
 async function importMany(pkgs) {
   const list = (pkgs || []).filter(Boolean);
   if (!list.length) { toast('没有可导入的作品', true); return; }
-  if (!window.confirm('导入 ' + list.length + ' 件作品到世界书「' + settings.worldbook + '」？')) return;
+  const aetheraMode = currentCardScope() === 'aethera';
+  if (aetheraMode) return importManyAethera(list);
+  if (!window.confirm('导入 ' + list.length + ' 件作品到世界书「' + activeWorldbook() + '」？')) return;
   load(true);
   try {
     const data = await loadWorldbook();
@@ -574,11 +706,103 @@ async function importMany(pkgs) {
     load(false);
   }
 }
+/* 艾瑟拉导入分流：角色→世界书；刻印（blueprint）→刻印工坊存档合并（不写世界书） */
+async function importManyAethera(list) {
+  const wb = list.filter((p) => (p.category || p.type) === 'character');
+  const sigil = list.filter((p) => (p.category || p.type) === 'blueprint');
+  const other = list.filter((p) => (p.category || p.type) !== 'character' && (p.category || p.type) !== 'blueprint');
+  if (!wb.length && !sigil.length) { toast('艾瑟拉板块目前支持导入：角色（世界书）、刻印（刻印工坊）', true); return; }
+  const parts = [];
+  if (wb.length) parts.push(wb.length + ' 件角色→世界书「' + activeWorldbook() + '」');
+  if (sigil.length) parts.push(sigil.length + ' 件刻印→刻印工坊');
+  if (other.length) parts.push(other.length + ' 件暂不支持');
+  if (!window.confirm('导入选中作品（' + parts.join('；') + '）。继续？')) return;
+  load(true);
+  const skipped = [];
+  let wbOk = 0, sigilOk = 0, sigilCount = 0;
+  try {
+    if (wb.length) {
+      const data = await loadWorldbook();
+      for (const pkg of wb) {
+        try { applyPackageToWorldbookAethera(data, pkg); wbOk++; }
+        catch (e) { skipped.push((pkg.title || pkg.id || '') + '：' + (e && e.message ? e.message : String(e))); }
+      }
+      rebuildSharedEntriesAethera(data, wb[0]);
+      await saveWorldbook(data);
+    }
+    for (const pkg of sigil) {
+      try { sigilCount += await importSigilToWorkshopAethera(pkg); sigilOk++; }
+      catch (e) { skipped.push((pkg.title || pkg.id || '') + '：' + (e && e.message ? e.message : String(e))); }
+    }
+    for (const pkg of other) skipped.push((pkg.title || pkg.id || '') + '：艾瑟拉板块暂不支持该类型');
+    /* ★ 1011c/d：通知开着的前端免刷新生效（刻印重读存档 / 角色重拉立绘名单） */
+    if (sigilOk) notifySigilFrontend('sigil-store-updated');
+    if (wbOk) {
+      const wbf = document.getElementById('sigil-circuit-overlay-frame');
+      const wbApi = wbf && wbf.contentWindow ? wbf.contentWindow.SigilExternal : null;
+      if (wbApi && typeof wbApi.refreshDlc === 'function') wbApi.refreshDlc();
+      else notifySigilFrontend('sigil-dlc-refresh');
+    }
+    toast('已导入 ' + (wbOk + sigilOk) + ' 件' + (sigilOk ? '（刻印工坊现有 ' + sigilCount + ' 道魔法）' : '') + (skipped.length ? '；跳过 ' + skipped.length + ' 件' : ''));
+    if (skipped.length) toast(skipped.join('\n'), true);
+    renderRepo();
+  } catch (e) {
+    toast('导入失败：' + e.message, true);
+  } finally {
+    load(false);
+  }
+}
+/* ★ 1011c：向开着的前端覆盖层发消息（前端监听 sigil-store-updated / sigil-dlc-refresh）。
+   前端没开时静默跳过 —— 下次打开读到的就是新数据。 */
+function notifySigilFrontend(type) {
+  try {
+    const frame = document.getElementById('sigil-circuit-overlay-frame');
+    if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: type }, '*');
+  } catch (e) { /* ignore */ }
+}
+/* 刻印作品 → 刻印工坊：把作品里的存档合并进聊天变量 academy.frontend.v3 ——
+   与刻印工坊自带「导入存档」同一份数据通道（{version:3, draft, saved}），saved 按图纸 id 去重合并 */
+async function importSigilToWorkshopAethera(pkg) {
+  const extra = pkg.payload && pkg.payload.extra ? pkg.payload.extra : {};
+  const archive = extra.sigilArchive || (pkg.payload && pkg.payload.sigilArchive) || null;
+  if (!archive || archive.format !== 'academy-sigil-archive' || archive.version !== 3 || !Array.isArray(archive.saved)) {
+    throw new Error('作品里没有有效的刻印工坊存档（需要 v3 导出文件）');
+  }
+  const incoming = archive.saved.filter((m) => m && Array.isArray(m.parts));
+  if (!incoming.length) throw new Error('这份存档里没有保存的魔法');
+  const th = window.TavernHelper || (window.parent && window.parent.TavernHelper);
+  if (!th || typeof th.insertOrAssignVariables !== 'function' || typeof th.getVariables !== 'function') {
+    throw new Error('需要酒馆助手（TavernHelper）才能把魔法导入刻印工坊');
+  }
+  /* ★ 1011d：前端开着 → 直接调刻印工坊自己的导入机制（同「导入存档」代码路径，自带热更新） */
+  const frame = document.getElementById('sigil-circuit-overlay-frame');
+  const extApi = frame && frame.contentWindow ? frame.contentWindow.SigilExternal : null;
+  if (extApi && typeof extApi.importArchiveJson === 'function') {
+    const r = extApi.importArchiveJson(archive);
+    if (!r || !r.ok) throw new Error(r && r.error ? r.error : '导入失败');
+    return r.added || 0;
+  }
+  /* 前端没开（或版本旧）：写存档变量，下次打开/前端热更新通道生效 */
+  const STORE_KEY = 'academy.frontend.v3';
+  const cur = ((await th.getVariables({ type: 'chat' })) || {})[STORE_KEY] || null;
+  let next;
+  if (cur && Array.isArray(cur.saved)) {
+    const byId = new Map(cur.saved.map((m) => [String(m.id), m]));
+    for (const m of incoming) byId.set(String(m.id), m);
+    const keepDraft = cur.draft && Array.isArray(cur.draft.parts) && cur.draft.parts.length ? cur.draft : (archive.draft || { name: '', carrier: '', parts: [] });
+    next = { version: 3, draft: keepDraft, saved: [...byId.values()] };
+  } else {
+    next = { version: 3, draft: archive.draft || { name: '', carrier: '', parts: [] }, saved: incoming.slice() };
+  }
+  await th.insertOrAssignVariables({ [STORE_KEY]: next }, { type: 'chat' });
+  return incoming.length;
+}
 
 /* ---------- 本地仓库悬浮窗 ---------- */
 let started = false;
 function load(on) { if (ui) ui.loading.style.display = on ? 'flex' : 'none'; }
 function openRepoPanel() {
+  if (!isCurrentWorkshopCard()) { toast('荧荧工坊只绑定在指定角色卡里使用（当前卡未绑定）'); return; }
   if (!ui) buildRepo();
   if (!ui) return;
   syncPhoneChrome();
@@ -621,86 +845,52 @@ function currentCharacter() {
     return list.find((ch) => ch && (ch.avatar === cid || String(ch.avatar || '') === String(cid))) || null;
   } catch { return null; }
 }
-function charHaystack(ch) {
-  if (!ch) return '';
-  const bits = [];
-  function push(v) {
-    if (v == null) return;
-    if (typeof v === 'string') { bits.push(v); return; }
-    if (typeof v === 'number' || typeof v === 'boolean') { bits.push(String(v)); return; }
-    try { bits.push(JSON.stringify(v)); } catch { /* ignore */ }
-  }
-  push(ch.name); push(ch.avatar); push(ch.creatorcomment);
-  const d = ch.data;
-  if (d) {
-    push(d.name); push(d.creator_notes); push(d.creatorcomment); push(d.extensions);
-    if (d.character_book) push(d.character_book.name);
-  }
+/* 绑定白名单：悬浮球只在这些角色卡内出现和可用（卡名或头像文件名前缀匹配，忽略大小写）。
+   每张绑定卡对应一个工坊板块（scope）：仓库与云端内容按 scope 互相独立。
+   要绑新卡就往这里加一行。 */
+const BOUND_CARDS = [
+  { match: 'magic fairy', scope: 'magic-fairy', label: 'Magic Fairy' },
+  { match: '艾瑟拉', scope: 'aethera', label: '艾瑟拉世界' },
+];
+function normCardKey(s) {
+  return String(s || '').trim().toLowerCase().replace(/\.png$/i, '');
+}
+/* 当前角色卡绑定的板块；未绑定返回 null */
+function currentCardScope() {
+  let ch = null;
+  try { ch = currentCharacter(); } catch { return null; }
+  if (!ch) return null;
+  let cands = [];
   try {
-    boundWorldNames(ch).forEach(push);
+    cands = [ch.name, ch.avatar];
+    if (ch.data) cands.push(ch.data.name, ch.data.avatar);
   } catch { /* ignore */ }
-  return bits.join('\n');
-}
-function boundWorldNames(ch) {
-  const names = [];
-  const d = ch && ch.data;
-  if (d && d.extensions && d.extensions.world) names.push(String(d.extensions.world));
-  if (d && d.character_book && d.character_book.name) names.push(String(d.character_book.name));
-  try {
-    const c = getCtx();
-    const wi = c && (c.worldInfo || c.world_info);
-    const fileName = ch.avatar || '';
-    const extra = wi && Array.isArray(wi.charLore) ? wi.charLore.find((e) => e && e.name === fileName) : null;
-    if (extra && Array.isArray(extra.extraBooks)) names.push(...extra.extraBooks.filter(Boolean));
-  } catch { /* ignore */ }
-  return names;
-}
-function isHostCardName(n) {
-  const s = String(n || '').trim();
-  return s === 'Magic Fairy' || s.indexOf('Magic Fairy') === 0;
-}
-function visibleCharName() {
-  const sels = ['#rm_button_selected_ch', '#rm_button_selected_ch .ch_name', '.character_name_block', '#top-bar .ch_name', '#chat_header .name'];
-  for (const s of sels) {
-    try {
-      const el = document.querySelector(s);
-      const t = el && String(el.textContent || '').trim();
-      if (t) return t;
-    } catch { /* ignore */ }
+  const keys = cands.map(normCardKey).filter(Boolean);
+  for (const b of BOUND_CARDS) {
+    if (keys.some((k) => k === b.match || k.startsWith(b.match))) return b.scope;
   }
-  return '';
+  return null;
 }
-function worldbookSelected() {
-  try {
-    const wi = document.querySelector('#world_info');
-    if (!wi) return '';
-    const opt = wi.options && wi.selectedIndex >= 0 ? wi.options[wi.selectedIndex] : null;
-    return String((opt && (opt.text || opt.value)) || wi.value || '');
-  } catch { return ''; }
+function currentScopeLabel() {
+  const scope = currentCardScope();
+  const hit = BOUND_CARDS.find((b) => b.scope === scope);
+  return hit ? hit.label : '';
 }
 function isCurrentWorkshopCard() {
-  try { if (document.getElementById('hwf-workshop')) return true; } catch { /* ignore */ }
-  try {
-    if (isHostCardName(visibleCharName())) return true;
-    if (String(worldbookSelected()).indexOf('群星的资料库') !== -1) return true;
-  } catch { /* ignore */ }
-  const ch = currentCharacter();
-  if (!ch) return false;
-  let hay = '';
-  try { hay = charHaystack(ch); } catch { /* ignore */ }
-  if (/hwf-workshop|hotaru-workshop|群星的资料库/.test(hay)) return true;
-  try {
-    const n = String(ch.name || (ch.data && ch.data.name) || '');
-    const av = String(ch.avatar || '');
-    if (isHostCardName(n) || isHostCardName(av.replace(/\.[^.]+$/, ''))) return true;
-  } catch { /* ignore */ }
-  return false;
+  return currentCardScope() != null;
 }
 function syncBallVisibility() {
   if (!ui) return;
   const on = isCurrentWorkshopCard();
+  if (!on && ui.panel.classList.contains('open')) {
+    ui.veil.classList.remove('on');
+    ui.panel.classList.remove('open');
+    try { document.body.style.overflow = ''; } catch { /* ignore */ }
+  }
   const panelOpen = ui.panel.classList.contains('open');
   ui.root.dataset.open = panelOpen ? 'true' : 'false';
+  /* 非绑定卡：整套悬浮窗（球/面板/遮罩）从渲染树整体移除——不可见也不可点，键盘焦点同样失效 */
+  ui.root.style.display = on ? '' : 'none';
   ui.ball.setAttribute('data-hidden', on ? '0' : '1');
   ui.ball.setAttribute('aria-hidden', on ? 'false' : 'true');
 }
@@ -748,7 +938,7 @@ async function onImportFilePicked(ev) {
     }
   }
   if (packs.length) {
-    upsertLocalPacks(packs);
+    upsertLocalPacks(packs, currentCardScope() || 'magic-fairy');
     toast('已加入 ' + packs.length + ' 件本地作品，勾选后点「导入选中」写入世界书');
     renderRepo();
   }
@@ -872,6 +1062,10 @@ function bindFabDrag(ball, panel) {
 function hostEl() {
   return document.documentElement || document.body;
 }
+/* 打开云端工坊网页：带上当前卡对应的板块（?scope=），网页直接落在同一板块 */
+function workshopWebUrl() {
+  return settings.gateway + '?from=' + encodeURIComponent(location.origin) + '&scope=' + encodeURIComponent(currentCardScope() || 'magic-fairy');
+}
 function healDom() {
   if (!ui || !ui.root) return;
   const host = hostEl();
@@ -885,6 +1079,7 @@ function buildRepo() {
   const root = document.createElement('div');
   root.id = 'hwf-root';
   root.dataset.open = 'false';
+  root.style.display = 'none'; /* 初始隐藏，等 syncBallVisibility 判定当前卡在白名单内才显示 */
   const ball = document.createElement('button');
   ball.id = 'hwf-fab';
   ball.type = 'button';
@@ -930,7 +1125,7 @@ function buildRepo() {
   bindFabDrag(ball, panel);
   veil.addEventListener('click', closeRepoPanel);
   panel.querySelector('#hwf-close').addEventListener('click', closeRepoPanel);
-  panel.querySelector('#hwf-open').addEventListener('click', () => { window.open(settings.gateway + '?from=' + encodeURIComponent(location.origin), '_blank'); });
+  panel.querySelector('#hwf-open').addEventListener('click', () => { window.open(workshopWebUrl(), '_blank'); });
   panel.querySelector('#hwf-import-sel').addEventListener('click', importSelected);
   panel.querySelector('#hwf-import').addEventListener('click', pickImportFile);
   panel.querySelector('#hwf-check').addEventListener('click', () => checkUpdate(panel, false));
@@ -958,7 +1153,7 @@ async function importSelected() {
   for (const b of boxes) {
     const id = b.dataset.sel;
     if (b.dataset.local === '1') {
-      const p = findLocalPack(id);
+      const p = findLocalPack(id, currentCardScope() || 'magic-fairy');
       if (!p) { toast('本地作品不存在：' + id, true); continue; }
       pkgs.push(p);
       continue;
@@ -972,15 +1167,19 @@ async function importSelected() {
   }
   await importMany(pkgs);
 }
-function bindRepoRows() {
+function bindRepoRows(scope) {
   ui.list.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => {
-    if (b.dataset.local === '1') { removeLocalPack(b.dataset.del); toast('已移除本地文件'); renderRepo(); return; }
+    if (b.dataset.local === '1') { removeLocalPack(b.dataset.del, scope); toast('已移除本地文件'); renderRepo(); return; }
     apiDlDel(b.dataset.del).then(() => { toast('已移除'); renderRepo(); }).catch((e) => toast('移除失败：' + e.message, true));
   });
 }
 function renderRepo() {
   if (!ui) return;
   syncPhoneChrome();
+  const scope = currentCardScope() || 'magic-fairy';
+  const scopeLabel = currentScopeLabel() || 'Magic Fairy';
+  const sub = ui.panel.querySelector('.hwf-repo-sub');
+  if (sub) sub.textContent = 'hotaru-workshop v' + EXT_VERSION + ' · ' + scopeLabel + '仓';
   const phone = isPhoneUi();
   const av = settings.user && settings.user.avatar
     ? 'https://cdn.discordapp.com/avatars/' + encodeURIComponent(settings.user.id) + '/' + encodeURIComponent(settings.user.avatar) + '.png?size=64' : '';
@@ -995,9 +1194,10 @@ function renderRepo() {
   }
   const lo = ui.login.querySelector('#hwf-logout'); if (lo) lo.onclick = logout;
   const lb = ui.login.querySelector('#hwf-login-btn'); if (lb) lb.onclick = beginLogin;
-  const local = loadLocalPacks();
+  const local = loadLocalPacks(scope);
   const paintLocal = (cloud) => {
-    const cloudList = cloud || [];
+    /* 云端下载列表按板块过滤：Magic Fairy 下载的不会出现在艾瑟拉的仓库，反之亦然 */
+    const cloudList = (cloud || []).filter((p) => String((p && p.cardScope) || 'magic-fairy') === scope);
     const cloudIds = new Set(cloudList.map((p) => String(p.id)));
     const localOnly = local.filter((p) => !cloudIds.has(String(p.id)));
     const html = localOnly.map((p) => rowHtml(p, true)).join('') + cloudList.map((p) => rowHtml(p, false)).join('');
@@ -1010,7 +1210,7 @@ function renderRepo() {
       return;
     }
     ui.list.innerHTML = html;
-    bindRepoRows();
+    bindRepoRows(scope);
   };
   if (!settings.user || phone) { paintLocal([]); return; }
   ui.list.innerHTML = '<div class="hwf-empty">加载中…</div>';
@@ -1135,7 +1335,7 @@ function mountSettingsPanel() {
   panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>hotaru-workshop · 荧荧工坊 <span class="hwf-ext-version">v${EXT_VERSION}</span></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><div class="hwf-ext-actions"><button type="button" class="menu_button" data-repo>打开本地仓库</button><button type="button" class="menu_button" data-open>进入荧荧工坊</button><button type="button" class="menu_button" data-check>检查更新</button><button type="button" class="menu_button" data-update hidden>更新荧荧工坊</button></div><small data-status></small></div></div>`;
   host.appendChild(panel);
   panel.querySelector('[data-repo]').addEventListener('click', () => openRepoPanel());
-  panel.querySelector('[data-open]').addEventListener('click', () => { window.open(settings.gateway + '?from=' + encodeURIComponent(location.origin), '_blank'); });
+  panel.querySelector('[data-open]').addEventListener('click', () => { window.open(workshopWebUrl(), '_blank'); });
   panel.querySelector('[data-check]').addEventListener('click', () => checkUpdate(panel, false));
   panel.querySelector('[data-update]').addEventListener('click', () => doUpdate(panel));
   settingsMounted = true;

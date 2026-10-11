@@ -67,6 +67,7 @@
 }
 .hwf-ball:focus-visible { outline: 2px solid var(--hwf-blue); outline-offset: 8px; }
 .hwf-ball[data-hidden="1"] {
+    visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
     transform: scale(.72) translateY(8px);
