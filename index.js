@@ -1,4 +1,4 @@
-/*! hotaru-workshop v2.9.1 —— 本地仓库壳 + 云端荧荧工坊入口
+/*! hotaru-workshop v2.9.2 —— 本地仓库壳 + 云端荧荧工坊入口
  * 结构：悬浮球 = 本地仓库（只绑定白名单角色卡：Magic Fairy / 艾瑟拉；其余卡与主页完全不渲染、不可点）
  *       仓库 = 按卡分仓（magic-fairy / aethera），云端下载与本地导入都只进当前卡自己的仓
  *       导入 = 双管线：MF 走原管线（群星的资料库 v4.0，不再改动）；
@@ -12,7 +12,7 @@ const GATEWAY = 'https://workshop.hotaruworkshop.l.cd';
 const WORLDBOOKS = { 'magic-fairy': '群星的资料库 v4.0', 'aethera': '艾瑟拉世界 v1.1' };
 const WORLDBOOK = WORLDBOOKS['magic-fairy']; /* 旧字段兼容 */
 const NS = 'hotaruWorkshop';
-const EXT_VERSION = '2.9.1';
+const EXT_VERSION = '2.9.2';
 const SOURCE_KIND = 'hotaru-workshop';
 const ENTRY_MARK = '[hotaru]';
 
